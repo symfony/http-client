@@ -491,13 +491,28 @@ trait HttpClientTrait
             }
         }
 
+        $queryNotUrldecode = [];
+        foreach($queryArray as $k=>$v){
+            if(is_array($v) && isset($v['value'])){
+                if(isset($v['urldecode']) && $v['urldecode']===false){
+                    $queryNotUrldecode[$k] = $v['value'];
+                    unset($queryArray[$k]);
+                }
+            }
+        }
+
         $queryString = http_build_query($queryArray, '', '&', PHP_QUERY_RFC3986);
+
         $queryArray = [];
 
         if ($queryString) {
             foreach (explode('&', $queryString) as $v) {
                 $queryArray[rawurldecode(explode('=', $v, 2)[0])] = $v;
             }
+        }
+
+        foreach ($queryNotUrldecode as $k=>$v) {
+            $queryArray[$k] = $k.'='.$v;
         }
 
         return implode('&', $replace ? array_replace($query, $queryArray) : ($query + $queryArray));
