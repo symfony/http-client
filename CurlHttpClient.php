@@ -146,7 +146,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             $curlopts[CURLOPT_HTTP_VERSION] = CURL_HTTP_VERSION_2_0;
         }
 
-        if (isset($options['extra']['ignore_content_length'])) {
+        if (isset($options['extra']['ignore_content_length']) && $options['extra']['ignore_content_length'] === true) {
             $curlopts[CURLOPT_IGNORE_CONTENT_LENGTH] = 1;
         };
         
