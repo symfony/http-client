@@ -50,6 +50,14 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
      */
     private $multi;
 
+    /**
+     * The libcurl http2 push handler callback.
+     * Must be stored in a property due to refcounting issues, see https://github.com/symfony/symfony/issues/37252
+     *
+     * @var Closure
+     */
+    private $pushCallback;
+
     private static $curlVersion;
 
     /**
@@ -95,11 +103,11 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             return;
         }
 
-        $logger = &$this->logger;
+        $this->pushCallback = function ($parent, $pushed, array $requestHeaders) use ($maxPendingPushes) {
+            return $this->handlePush($parent, $pushed, $requestHeaders, $maxPendingPushes);
+        };
 
-        curl_multi_setopt($this->multi->handle, CURLMOPT_PUSHFUNCTION, static function ($parent, $pushed, array $requestHeaders) use ($multi, $maxPendingPushes, &$logger) {
-            return self::handlePush($parent, $pushed, $requestHeaders, $multi, $maxPendingPushes, $logger);
-        });
+        curl_multi_setopt($this->multi->handle, CURLMOPT_PUSHFUNCTION, $this->pushCallback);
     }
 
     /**
@@ -361,7 +369,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
         $this->reset();
     }
 
-    private static function handlePush($parent, $pushed, array $requestHeaders, CurlClientState $multi, int $maxPendingPushes, ?LoggerInterface $logger): int
+    private function handlePush($parent, $pushed, array $requestHeaders, int $maxPendingPushes): int
     {
         $headers = [];
         $origin = curl_getinfo($parent, CURLINFO_EFFECTIVE_URL);
@@ -373,7 +381,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
         }
 
         if (!isset($headers[':method']) || !isset($headers[':scheme']) || !isset($headers[':authority']) || !isset($headers[':path'])) {
-            $logger && $logger->debug(sprintf('Rejecting pushed response from "%s": pushed headers are invalid', $origin));
+            $this->logger && $this->logger->debug(sprintf('Rejecting pushed response from "%s": pushed headers are invalid', $origin));
 
             return CURL_PUSH_DENY;
         }
@@ -384,21 +392,21 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
         // but this is a MUST in the HTTP/2 RFC; let's restrict pushes to the original host,
         // ignoring domains mentioned as alt-name in the certificate for now (same as curl).
         if (0 !== strpos($origin, $url.'/')) {
-            $logger && $logger->debug(sprintf('Rejecting pushed response from "%s": server is not authoritative for "%s"', $origin, $url));
+            $this->logger && $this->logger->debug(sprintf('Rejecting pushed response from "%s": server is not authoritative for "%s"', $origin, $url));
 
             return CURL_PUSH_DENY;
         }
 
-        if ($maxPendingPushes <= \count($multi->pushedResponses)) {
-            $fifoUrl = key($multi->pushedResponses);
-            unset($multi->pushedResponses[$fifoUrl]);
-            $logger && $logger->debug(sprintf('Evicting oldest pushed response: "%s"', $fifoUrl));
+        if ($maxPendingPushes <= \count($this->multi->pushedResponses)) {
+            $fifoUrl = key($this->multi->pushedResponses);
+            unset($this->multi->pushedResponses[$fifoUrl]);
+            $this->logger && $this->logger->debug(sprintf('Evicting oldest pushed response: "%s"', $fifoUrl));
         }
 
         $url .= $headers[':path'][0];
-        $logger && $logger->debug(sprintf('Queueing pushed response: "%s"', $url));
+        $this->logger && $this->logger->debug(sprintf('Queueing pushed response: "%s"', $url));
 
-        $multi->pushedResponses[$url] = new PushedResponse(new CurlResponse($multi, $pushed), $headers, $multi->openHandles[(int) $parent][1] ?? [], $pushed);
+        $this->multi->pushedResponses[$url] = new PushedResponse(new CurlResponse($this->multi, $pushed), $headers, $this->multi->openHandles[(int) $parent][1] ?? [], $pushed);
 
         return CURL_PUSH_OK;
     }
