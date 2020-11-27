@@ -167,6 +167,10 @@ class HttpClientTraitTest extends TestCase
         yield ['/a//b/', '/a///../b/.'];
         yield ['/a/', '/a/b/..'];
         yield ['/a///b', '/a///b'];
+        yield ['/a/b', '/a/b'];
+        yield ['a/b', 'a/b'];
+        yield ['a/b/', 'a/b/'];
+        yield ['/a/b/', '/a/b/'];
     }
 
     public function testAuthBearerOption()
