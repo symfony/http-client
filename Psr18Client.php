@@ -100,6 +100,7 @@ final class Psr18Client implements ClientInterface, RequestFactoryInterface, Str
             $psrResponse = $this->responseFactory->createResponse($response->getStatusCode());
 
             foreach ($response->getHeaders(false) as $name => $values) {
+                $name = \trim($name);
                 foreach ($values as $value) {
                     $psrResponse = $psrResponse->withAddedHeader($name, $value);
                 }
