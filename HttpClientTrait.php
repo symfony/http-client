@@ -625,6 +625,16 @@ trait HttpClientTrait
      */
     private static function parseUrl(string $url, array $query = [], array $allowedSchemes = ['http' => 80, 'https' => 443]): array
     {
+        if (false !== ($i = strpos($url, '\\')) && $i < strcspn($url, '?#')) {
+            throw new InvalidArgumentException(\sprintf('Malformed URL "%s": backslashes are not allowed.', $url));
+        }
+        if (\strlen($url) !== strcspn($url, "\r\n\t")) {
+            throw new InvalidArgumentException(\sprintf('Malformed URL "%s": CR/LF/TAB characters are not allowed.', $url));
+        }
+        if ('' !== $url && (\ord($url[0]) <= 32 || \ord($url[-1]) <= 32)) {
+            throw new InvalidArgumentException(\sprintf('Malformed URL "%s": leading/trailing ASCII control characters or spaces are not allowed.', $url));
+        }
+
         if (false === $parts = parse_url($url)) {
             if ('/' !== ($url[0] ?? '') || false === $parts = parse_url($url.'#')) {
                 throw new InvalidArgumentException(\sprintf('Malformed URL "%s".', $url));
