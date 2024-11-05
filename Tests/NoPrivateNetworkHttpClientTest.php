@@ -65,14 +65,37 @@ class NoPrivateNetworkHttpClientTest extends TestCase
     /**
      * @dataProvider getExcludeData
      */
-    public function testExclude(string $ipAddr, $subnets, bool $mustThrow)
+    public function testExcludeByIp(string $ipAddr, $subnets, bool $mustThrow)
     {
         $content = 'foo';
-        $url = \sprintf('http://%s/', 0 < substr_count($ipAddr, ':') ? \sprintf('[%s]', $ipAddr) : $ipAddr);
+        $url = \sprintf('http://%s/', strtr($ipAddr, '.:', '--'));
 
         if ($mustThrow) {
             $this->expectException(TransportException::class);
             $this->expectExceptionMessage(\sprintf('IP "%s" is blocked for "%s".', $ipAddr, $url));
+        }
+
+        $previousHttpClient = $this->getHttpClientMock($url, $ipAddr, $content);
+        $client = new NoPrivateNetworkHttpClient($previousHttpClient, $subnets);
+        $response = $client->request('GET', $url);
+
+        if (!$mustThrow) {
+            $this->assertEquals($content, $response->getContent());
+            $this->assertEquals(200, $response->getStatusCode());
+        }
+    }
+
+    /**
+     * @dataProvider getExcludeData
+     */
+    public function testExcludeByHost(string $ipAddr, $subnets, bool $mustThrow)
+    {
+        $content = 'foo';
+        $url = \sprintf('http://%s/', str_contains($ipAddr, ':') ? \sprintf('[%s]', $ipAddr) : $ipAddr);
+
+        if ($mustThrow) {
+            $this->expectException(TransportException::class);
+            $this->expectExceptionMessage(\sprintf('Host "%s" is blocked for "%s".', $ipAddr, $url));
         }
 
         $previousHttpClient = $this->getHttpClientMock($url, $ipAddr, $content);
