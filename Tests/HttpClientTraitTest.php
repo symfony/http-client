@@ -239,11 +239,30 @@ class HttpClientTraitTest extends TestCase
         self::resolveUrl(self::parseUrl('localhost:8080'), null);
     }
 
-    public function testResolveBaseUrlWitoutScheme()
+    public function testResolveBaseUrlWithoutScheme()
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Invalid URL: scheme is missing in "//localhost:8081". Did you forget to add "http(s)://"?');
         self::resolveUrl(self::parseUrl('/foo'), self::parseUrl('localhost:8081'));
+    }
+
+    /**
+     * @testWith ["http://foo.com\\bar"]
+     *           ["\\\\foo.com/bar"]
+     *           ["a\rb"]
+     *           ["a\nb"]
+     *           ["a\tb"]
+     *           ["\u0000foo"]
+     *           ["foo\u0000"]
+     *           [" foo"]
+     *           ["foo "]
+     *           [":"]
+     */
+    public function testParseMalformedUrl(string $url)
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Malformed URL');
+        self::parseUrl($url);
     }
 
     /**
