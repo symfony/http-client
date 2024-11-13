@@ -257,7 +257,7 @@ class HttpClientTraitTest extends TestCase
      *           ["foo\u0000"]
      *           [" foo"]
      *           ["foo "]
-     *           [":"]
+     *           ["//"]
      */
     public function testParseMalformedUrl(string $url)
     {
