@@ -383,14 +383,14 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
 
             try {
                 $url = self::parseUrl($location);
+                $locationHasHost = isset($url['authority']);
+                $url = self::resolveUrl($url, $info['url']);
             } catch (InvalidArgumentException) {
                 $info['redirect_url'] = null;
 
                 return null;
             }
 
-            $locationHasHost = isset($url['authority']);
-            $url = self::resolveUrl($url, $info['url']);
             $info['redirect_url'] = implode('', $url);
 
             if ($info['redirect_count'] >= $maxRedirects) {
