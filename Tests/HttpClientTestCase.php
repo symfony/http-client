@@ -490,6 +490,15 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         $client->request('GET', 'http://symfony.com', ['resolve' => ['symfony.com' => '127.0.0.1']]);
     }
 
+    public function testNoRedirectWithInvalidLocation()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+
+        $response = $client->request('GET', 'http://localhost:8057/302-no-scheme');
+
+        $this->assertSame(302, $response->getStatusCode());
+    }
+
     /**
      * @dataProvider getRedirectWithAuthTests
      */
