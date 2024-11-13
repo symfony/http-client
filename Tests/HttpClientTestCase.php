@@ -494,7 +494,11 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
     {
         $client = $this->getHttpClient(__FUNCTION__);
 
-        $response = $client->request('GET', 'http://localhost:8057/302-no-scheme');
+        $response = $client->request('GET', 'http://localhost:8057/302?location=localhost:8067');
+
+        $this->assertSame(302, $response->getStatusCode());
+
+        $response = $client->request('GET', 'http://localhost:8057/302?location=http:localhost');
 
         $this->assertSame(302, $response->getStatusCode());
     }

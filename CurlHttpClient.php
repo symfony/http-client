@@ -425,6 +425,8 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             try {
                 $locationHasHost = false;
                 $location = self::parseUrl($location);
+                $url = self::parseUrl(curl_getinfo($ch, \CURLINFO_EFFECTIVE_URL));
+                $url = self::resolveUrl($location, $url);
             } catch (InvalidArgumentException $e) {
                 return null;
             }
@@ -445,9 +447,6 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             } elseif ($noContent && $redirectHeaders) {
                 curl_setopt($ch, \CURLOPT_HTTPHEADER, $redirectHeaders['with_auth']);
             }
-
-            $url = self::parseUrl(curl_getinfo($ch, \CURLINFO_EFFECTIVE_URL));
-            $url = self::resolveUrl($location, $url);
 
             curl_setopt($ch, \CURLOPT_PROXY, self::getProxyUrl($options['proxy'], $url));
 
