@@ -15,6 +15,7 @@ use Symfony\Component\HttpClient\Exception\ClientException;
 use Symfony\Component\HttpClient\Exception\InvalidArgumentException;
 use Symfony\Component\HttpClient\Exception\TransportException;
 use Symfony\Component\HttpClient\Internal\ClientState;
+use Symfony\Component\HttpClient\NoPrivateNetworkHttpClient;
 use Symfony\Component\HttpClient\Response\StreamWrapper;
 use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Process;
@@ -465,6 +466,28 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         $this->expectExceptionMessage('Invalid URL: host is missing in "http:/localhost:8057/".');
 
         $httpClient->request('GET', 'http:/localhost:8057/');
+    }
+
+    public function testNoPrivateNetwork()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+        $client = new NoPrivateNetworkHttpClient($client);
+
+        $this->expectException(TransportException::class);
+        $this->expectExceptionMessage('Host "localhost" is blocked');
+
+        $client->request('GET', 'http://localhost:8888');
+    }
+
+    public function testNoPrivateNetworkWithResolve()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+        $client = new NoPrivateNetworkHttpClient($client);
+
+        $this->expectException(TransportException::class);
+        $this->expectExceptionMessage('Host "symfony.com" is blocked');
+
+        $client->request('GET', 'http://symfony.com', ['resolve' => ['symfony.com' => '127.0.0.1']]);
     }
 
     /**
