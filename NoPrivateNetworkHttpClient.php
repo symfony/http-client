@@ -56,14 +56,27 @@ final class NoPrivateNetworkHttpClient implements HttpClientInterface, LoggerAwa
 
         $subnets = $this->subnets;
 
-        $options['on_progress'] = static function (int $dlNow, int $dlSize, array $info) use ($onProgress, $subnets): void {
+        $options['on_progress'] = static function (int $dlNow, int $dlSize, array $info, ?\Closure $resolve = null) use ($onProgress, $subnets): void {
             static $lastUrl = '';
             static $lastPrimaryIp = '';
 
             if ($info['url'] !== $lastUrl) {
                 $host = trim(parse_url($info['url'], PHP_URL_HOST) ?: '', '[]');
+                $resolve ??= static fn () => null;
 
-                if ($host && IpUtils::checkIp($host, $subnets ?? IpUtils::PRIVATE_SUBNETS)) {
+                if (($ip = $host)
+                    && !filter_var($ip, \FILTER_VALIDATE_IP, \FILTER_FLAG_IPV6)
+                    && !filter_var($ip, \FILTER_VALIDATE_IP, \FILTER_FLAG_IPV4)
+                    && !$ip = $resolve($host)
+                ) {
+                    if ($ip = @(dns_get_record($host, \DNS_A)[0]['ip'] ?? null)) {
+                        $resolve($host, $ip);
+                    } elseif ($ip = @(dns_get_record($host, \DNS_AAAA)[0]['ipv6'] ?? null)) {
+                        $resolve($host, '['.$ip.']');
+                    }
+                }
+
+                if ($ip && IpUtils::checkIp($ip, $subnets ?? IpUtils::PRIVATE_SUBNETS)) {
                     throw new TransportException(sprintf('Host "%s" is blocked for "%s".', $host, $info['url']));
                 }
 
