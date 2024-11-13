@@ -83,7 +83,10 @@ final class NoPrivateNetworkHttpClient implements HttpClientInterface, LoggerAwa
         $options['on_progress'] = function (int $dlNow, int $dlSize, array $info, ?\Closure $resolve = null) use ($onProgress, $subnets, &$lastUrl, &$lastPrimaryIp): void {
             if ($info['url'] !== $lastUrl) {
                 $host = trim(parse_url($info['url'], PHP_URL_HOST) ?: '', '[]');
-                $resolve ??= static fn () => null;
+
+                if (null === $resolve) {
+                    $resolve = static function () { return null; };
+                }
 
                 if (($ip = $host)
                     && !filter_var($ip, \FILTER_VALIDATE_IP, \FILTER_FLAG_IPV6)
