@@ -12,6 +12,7 @@
 namespace Symfony\Component\HttpClient\Tests;
 
 use PHPUnit\Framework\SkippedTestSuiteError;
+use Symfony\Bridge\PhpUnit\DnsMock;
 use Symfony\Component\HttpClient\Exception\ClientException;
 use Symfony\Component\HttpClient\Exception\InvalidArgumentException;
 use Symfony\Component\HttpClient\Exception\TransportException;
@@ -488,6 +489,38 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         $this->expectExceptionMessage('Host "symfony.com" is blocked');
 
         $client->request('GET', 'http://symfony.com', ['resolve' => ['symfony.com' => '127.0.0.1']]);
+    }
+
+    public function testNoPrivateNetworkWithResolveAndRedirect()
+    {
+        DnsMock::withMockedHosts([
+            'localhost' => [
+                [
+                    'host' => 'localhost',
+                    'class' => 'IN',
+                    'ttl' => 15,
+                    'type' => 'A',
+                    'ip' => '127.0.0.1',
+                ],
+            ],
+            'symfony.com' => [
+                [
+                    'host' => 'symfony.com',
+                    'class' => 'IN',
+                    'ttl' => 15,
+                    'type' => 'A',
+                    'ip' => '10.0.0.1',
+                ],
+            ],
+        ]);
+
+        $client = $this->getHttpClient(__FUNCTION__);
+        $client = new NoPrivateNetworkHttpClient($client, '10.0.0.1/32');
+
+        $this->expectException(TransportException::class);
+        $this->expectExceptionMessage('Host "symfony.com" is blocked');
+
+        $client->request('GET', 'http://localhost:8057/302?location=https://symfony.com/');
     }
 
     public function testNoRedirectWithInvalidLocation()
