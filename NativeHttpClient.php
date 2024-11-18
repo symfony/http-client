@@ -334,7 +334,9 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
             $info['debug'] .= "* Hostname was NOT found in DNS cache\n";
             $now = microtime(true);
 
-            if (!$ip = gethostbynamel($host)) {
+            if ('[' === $host[0] && ']' === $host[-1] && filter_var(substr($host, 1, -1), \FILTER_VALIDATE_IP, \FILTER_FLAG_IPV6)) {
+                $ip = [$host];
+            } elseif (!$ip = gethostbynamel($host)) {
                 throw new TransportException(sprintf('Could not resolve host "%s".', $host));
             }
 

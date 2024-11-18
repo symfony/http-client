@@ -274,7 +274,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             if (file_exists($options['bindto'])) {
                 $curlopts[\CURLOPT_UNIX_SOCKET_PATH] = $options['bindto'];
             } elseif (!str_starts_with($options['bindto'], 'if!') && preg_match('/^(.*):(\d+)$/', $options['bindto'], $matches)) {
-                $curlopts[\CURLOPT_INTERFACE] = $matches[1];
+                $curlopts[\CURLOPT_INTERFACE] = trim($matches[1], '[]');
                 $curlopts[\CURLOPT_LOCALPORT] = $matches[2];
             } else {
                 $curlopts[\CURLOPT_INTERFACE] = $options['bindto'];
