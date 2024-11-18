@@ -79,6 +79,9 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
             if (str_starts_with($options['bindto'], 'host!')) {
                 $options['bindto'] = substr($options['bindto'], 5);
             }
+            if ((\PHP_VERSION_ID < 80223 || 80300 <= \PHP_VERSION_ID && 80311 < \PHP_VERSION_ID) && '\\' === \DIRECTORY_SEPARATOR && '[' === $options['bindto'][0]) {
+                $options['bindto'] = preg_replace('{^\[[^\]]++\]}', '[$0]', $options['bindto']);
+            }
         }
 
         $hasContentLength = isset($options['normalized_headers']['content-length']);
@@ -330,23 +333,27 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
      */
     private static function dnsResolve($host, NativeClientState $multi, array &$info, ?\Closure $onProgress): string
     {
-        if (null === $ip = $multi->dnsCache[$host] ?? null) {
+        $flag = '' !== $host && '[' === $host[0] && ']' === $host[-1] && str_contains($host, ':') ? \FILTER_FLAG_IPV6 : \FILTER_FLAG_IPV4;
+        $ip = \FILTER_FLAG_IPV6 === $flag ? substr($host, 1, -1) : $host;
+
+        if (filter_var($ip, \FILTER_VALIDATE_IP, $flag)) {
+            // The host is already an IP address
+        } elseif (null === $ip = $multi->dnsCache[$host] ?? null) {
             $info['debug'] .= "* Hostname was NOT found in DNS cache\n";
             $now = microtime(true);
 
-            if ('[' === $host[0] && ']' === $host[-1] && filter_var(substr($host, 1, -1), \FILTER_VALIDATE_IP, \FILTER_FLAG_IPV6)) {
-                $ip = [$host];
-            } elseif (!$ip = gethostbynamel($host)) {
+            if (!$ip = gethostbynamel($host)) {
                 throw new TransportException(sprintf('Could not resolve host "%s".', $host));
             }
 
-            $info['namelookup_time'] = microtime(true) - ($info['start_time'] ?: $now);
             $multi->dnsCache[$host] = $ip = $ip[0];
             $info['debug'] .= "* Added {$host}:0:{$ip} to DNS cache\n";
         } else {
             $info['debug'] .= "* Hostname was found in DNS cache\n";
+            $host = str_contains($ip, ':') ? "[$ip]" : $ip;
         }
 
+        $info['namelookup_time'] = microtime(true) - ($info['start_time'] ?: $now);
         $info['primary_ip'] = $ip;
 
         if ($onProgress) {
@@ -354,7 +361,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
             $onProgress();
         }
 
-        return $ip;
+        return $host;
     }
 
     /**
