@@ -207,7 +207,14 @@ trait HttpClientTrait
         if ($resolve = $options['resolve'] ?? false) {
             $options['resolve'] = [];
             foreach ($resolve as $k => $v) {
-                $options['resolve'][substr(self::parseUrl('http://'.$k)['authority'], 2)] = (string) $v;
+                if ('' === $v = (string) $v) {
+                    throw new InvalidArgumentException(sprintf('Option "resolve" for host "%s" cannot be empty.', $k));
+                }
+                if ('[' === $v[0] && ']' === substr($v, -1) && str_contains($v, ':')) {
+                    $v = substr($v, 1, -1);
+                }
+
+                $options['resolve'][substr(self::parseUrl('http://'.$k)['authority'], 2)] = $v;
             }
         }
 
@@ -230,7 +237,14 @@ trait HttpClientTrait
 
         if ($resolve = $defaultOptions['resolve'] ?? false) {
             foreach ($resolve as $k => $v) {
-                $options['resolve'] += [substr(self::parseUrl('http://'.$k)['authority'], 2) => (string) $v];
+                if ('' === $v = (string) $v) {
+                    throw new InvalidArgumentException(sprintf('Option "resolve" for host "%s" cannot be empty.', $k));
+                }
+                if ('[' === $v[0] && ']' === substr($v, -1) && str_contains($v, ':')) {
+                    $v = substr($v, 1, -1);
+                }
+
+                $options['resolve'] += [substr(self::parseUrl('http://'.$k)['authority'], 2) => $v];
             }
         }
 
