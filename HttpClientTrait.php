@@ -208,9 +208,8 @@ trait HttpClientTrait
             $options['resolve'] = [];
             foreach ($resolve as $k => $v) {
                 if ('' === $v = (string) $v) {
-                    throw new InvalidArgumentException(sprintf('Option "resolve" for host "%s" cannot be empty.', $k));
-                }
-                if ('[' === $v[0] && ']' === substr($v, -1) && str_contains($v, ':')) {
+                    $v = null;
+                } elseif ('[' === $v[0] && ']' === substr($v, -1) && str_contains($v, ':')) {
                     $v = substr($v, 1, -1);
                 }
 
@@ -238,9 +237,8 @@ trait HttpClientTrait
         if ($resolve = $defaultOptions['resolve'] ?? false) {
             foreach ($resolve as $k => $v) {
                 if ('' === $v = (string) $v) {
-                    throw new InvalidArgumentException(sprintf('Option "resolve" for host "%s" cannot be empty.', $k));
-                }
-                if ('[' === $v[0] && ']' === substr($v, -1) && str_contains($v, ':')) {
+                    $v = null;
+                } elseif ('[' === $v[0] && ']' === substr($v, -1) && str_contains($v, ':')) {
                     $v = substr($v, 1, -1);
                 }
 
