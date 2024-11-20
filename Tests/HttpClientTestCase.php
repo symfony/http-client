@@ -200,20 +200,20 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
 
         $client->reset();
 
-        $expected = [
-            'Request: "GET https://127.0.0.1:3000/json"',
-            'Queueing pushed response: "https://127.0.0.1:3000/json/1"',
-            'Queueing pushed response: "https://127.0.0.1:3000/json/2"',
-            'Queueing pushed response: "https://127.0.0.1:3000/json/3"',
-            'Response: "200 https://127.0.0.1:3000/json"',
-            'Accepting pushed response: "GET https://127.0.0.1:3000/json/1"',
-            'Response: "200 https://127.0.0.1:3000/json/1"',
-            'Accepting pushed response: "GET https://127.0.0.1:3000/json/2"',
-            'Response: "200 https://127.0.0.1:3000/json/2"',
-            'Accepting pushed response: "GET https://127.0.0.1:3000/json/3"',
-            'Response: "200 https://127.0.0.1:3000/json/3"',
-        ];
-        $this->assertSame($expected, $logger->logs);
+        $expected = <<<EOTXT
+            Request: "GET https://127.0.0.1:3000/json"
+            Queueing pushed response: "https://127.0.0.1:3000/json/1"
+            Queueing pushed response: "https://127.0.0.1:3000/json/2"
+            Queueing pushed response: "https://127.0.0.1:3000/json/3"
+            Response: "200 https://127.0.0.1:3000/json" %f seconds
+            Accepting pushed response: "GET https://127.0.0.1:3000/json/1"
+            Response: "200 https://127.0.0.1:3000/json/1" %f seconds
+            Accepting pushed response: "GET https://127.0.0.1:3000/json/2"
+            Response: "200 https://127.0.0.1:3000/json/2" %f seconds
+            Accepting pushed response: "GET https://127.0.0.1:3000/json/3"
+            Response: "200 https://127.0.0.1:3000/json/3" %f seconds
+            EOTXT;
+        $this->assertStringMatchesFormat($expected, implode("\n", $logger->logs));
     }
 
     public function testPause()
@@ -288,19 +288,19 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
 
         $client->reset();
 
-        $expected = [
-            'Request: "GET https://127.0.0.1:3000/json"',
-            'Queueing pushed response: "https://127.0.0.1:3000/json/1"',
-            'Queueing pushed response: "https://127.0.0.1:3000/json/2"',
-            'Queueing pushed response: "https://127.0.0.1:3000/json/3"',
-            'Response: "200 https://127.0.0.1:3000/json"',
-            'Accepting pushed response: "GET https://127.0.0.1:3000/json/1"',
-            'Response: "200 https://127.0.0.1:3000/json/1"',
-            'Accepting pushed response: "GET https://127.0.0.1:3000/json/2"',
-            'Response: "200 https://127.0.0.1:3000/json/2"',
-            'Unused pushed response: "https://127.0.0.1:3000/json/3"',
-        ];
-        $this->assertSame($expected, $logger->logs);
+        $expected = <<<EOTXT
+            Request: "GET https://127.0.0.1:3000/json"
+            Queueing pushed response: "https://127.0.0.1:3000/json/1"
+            Queueing pushed response: "https://127.0.0.1:3000/json/2"
+            Queueing pushed response: "https://127.0.0.1:3000/json/3"
+            Response: "200 https://127.0.0.1:3000/json" %f seconds
+            Accepting pushed response: "GET https://127.0.0.1:3000/json/1"
+            Response: "200 https://127.0.0.1:3000/json/1" %f seconds
+            Accepting pushed response: "GET https://127.0.0.1:3000/json/2"
+            Response: "200 https://127.0.0.1:3000/json/2" %f seconds
+            Unused pushed response: "https://127.0.0.1:3000/json/3"
+            EOTXT;
+        $this->assertStringMatchesFormat($expected, implode("\n", $logger->logs));
     }
 
     public function testDnsFailure()

@@ -434,6 +434,17 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
                 }
             }
 
+            $info += [
+                'connect_time' => 0.0,
+                'pretransfer_time' => 0.0,
+                'starttransfer_time' => 0.0,
+                'total_time' => 0.0,
+                'namelookup_time' => 0.0,
+                'primary_ip' => '',
+                'primary_port' => 0,
+                'start_time' => microtime(true),
+            ];
+
             $pushDeferred->complete();
             $logger?->debug(\sprintf('Accepting pushed response: "%s %s"', $info['http_method'], $info['url']));
             self::addResponseHeaders($response, $info, $headers);
