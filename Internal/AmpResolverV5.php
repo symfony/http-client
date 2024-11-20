@@ -32,19 +32,33 @@ class AmpResolverV5 implements DnsResolver
 
     public function resolve(string $name, ?int $typeRestriction = null, ?Cancellation $cancellation = null): array
     {
-        if (!isset($this->dnsMap[$name]) || !\in_array($typeRestriction, [DnsRecord::A, null], true)) {
+        $recordType = DnsRecord::A;
+        $ip = $this->dnsMap[$name] ?? null;
+
+        if (null !== $ip && str_contains($ip, ':')) {
+            $recordType = DnsRecord::AAAA;
+        }
+
+        if (null === $ip || $recordType !== ($typeRestriction ?? $recordType)) {
             return Dns\resolve($name, $typeRestriction, $cancellation);
         }
 
-        return [new DnsRecord($this->dnsMap[$name], DnsRecord::A, null)];
+        return [new DnsRecord($ip, $recordType, null)];
     }
 
     public function query(string $name, int $type, ?Cancellation $cancellation = null): array
     {
-        if (!isset($this->dnsMap[$name]) || DnsRecord::A !== $type) {
+        $recordType = DnsRecord::A;
+        $ip = $this->dnsMap[$name] ?? null;
+
+        if (null !== $ip && str_contains($ip, ':')) {
+            $recordType = DnsRecord::AAAA;
+        }
+
+        if (null !== $ip || $recordType !== $type) {
             return Dns\resolve($name, $type, $cancellation);
         }
 
-        return [new DnsRecord($this->dnsMap[$name], DnsRecord::A, null)];
+        return [new DnsRecord($ip, $recordType, null)];
     }
 }
