@@ -128,7 +128,7 @@ final class CurlResponse implements ResponseInterface, StreamableInterface
                 try {
                     rewind($debugBuffer);
                     $debug = ['debug' => stream_get_contents($debugBuffer)];
-                    $onProgress($dlNow, $dlSize, $url + curl_getinfo($ch) + $info + $debug, $resolve);
+                    $onProgress($dlNow, $dlSize, $url + curl_getinfo($ch) + $info + $debug + ['resolve' => $resolve]);
                 } catch (\Throwable $e) {
                     $multi->handlesActivity[(int) $ch][] = null;
                     $multi->handlesActivity[(int) $ch][] = $e;
@@ -436,21 +436,11 @@ final class CurlResponse implements ResponseInterface, StreamableInterface
                 $info['http_method'] = 'HEAD' === $info['http_method'] ? 'HEAD' : 'GET';
                 curl_setopt($ch, \CURLOPT_CUSTOMREQUEST, $info['http_method']);
             }
-            $locationHasHost = false;
 
-            if (null === $info['redirect_url'] = $resolveRedirect($ch, $location, $noContent, $locationHasHost)) {
+            if (null === $info['redirect_url'] = $resolveRedirect($ch, $location, $noContent)) {
                 $options['max_redirects'] = curl_getinfo($ch, \CURLINFO_REDIRECT_COUNT);
                 curl_setopt($ch, \CURLOPT_FOLLOWLOCATION, false);
                 curl_setopt($ch, \CURLOPT_MAXREDIRS, $options['max_redirects']);
-            } elseif ($locationHasHost) {
-                $url = parse_url($info['redirect_url']);
-
-                if (null !== $ip = $multi->dnsCache->hostnames[$url['host'] = strtolower($url['host'])] ?? null) {
-                    // Populate DNS cache for redirects if needed
-                    $port = $url['port'] ?? ('http' === $url['scheme'] ? 80 : 443);
-                    curl_setopt($ch, \CURLOPT_RESOLVE, ["{$url['host']}:$port:$ip"]);
-                    $multi->dnsCache->removals["-{$url['host']}:$port"] = "-{$url['host']}:$port";
-                }
             }
         }
 

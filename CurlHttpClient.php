@@ -421,9 +421,8 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             }
         }
 
-        return static function ($ch, string $location, bool $noContent, bool &$locationHasHost) use (&$redirectHeaders, $options) {
+        return static function ($ch, string $location, bool $noContent) use (&$redirectHeaders, $options) {
             try {
-                $locationHasHost = false;
                 $location = self::parseUrl($location);
                 $url = self::parseUrl(curl_getinfo($ch, \CURLINFO_EFFECTIVE_URL));
                 $url = self::resolveUrl($location, $url);
@@ -439,9 +438,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
                 $redirectHeaders['with_auth'] = array_filter($redirectHeaders['with_auth'], $filterContentHeaders);
             }
 
-            $locationHasHost = isset($location['authority']);
-
-            if ($redirectHeaders && $locationHasHost) {
+            if ($redirectHeaders && isset($location['authority'])) {
                 $requestHeaders = parse_url($location['authority'], \PHP_URL_HOST) === $redirectHeaders['host'] ? $redirectHeaders['with_auth'] : $redirectHeaders['no_auth'];
                 curl_setopt($ch, \CURLOPT_HTTPHEADER, $requestHeaders);
             } elseif ($noContent && $redirectHeaders) {

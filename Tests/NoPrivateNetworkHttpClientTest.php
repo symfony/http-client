@@ -75,7 +75,7 @@ class NoPrivateNetworkHttpClientTest extends TestCase
             $this->expectExceptionMessage(sprintf('IP "%s" is blocked for "%s".', $ipAddr, $url));
         }
 
-        $previousHttpClient = $this->getHttpClientMock($url, $ipAddr, $content);
+        $previousHttpClient = $this->getMockHttpClient($ipAddr, $content);
         $client = new NoPrivateNetworkHttpClient($previousHttpClient, $subnets);
         $response = $client->request('GET', $url);
 
@@ -91,14 +91,15 @@ class NoPrivateNetworkHttpClientTest extends TestCase
     public function testExcludeByHost(string $ipAddr, $subnets, bool $mustThrow)
     {
         $content = 'foo';
-        $url = sprintf('http://%s/', str_contains($ipAddr, ':') ? sprintf('[%s]', $ipAddr) : $ipAddr);
+        $host = str_contains($ipAddr, ':') ? sprintf('[%s]', $ipAddr) : $ipAddr;
+        $url = sprintf('http://%s/', $host);
 
         if ($mustThrow) {
             $this->expectException(TransportException::class);
-            $this->expectExceptionMessage(sprintf('Host "%s" is blocked for "%s".', $ipAddr, $url));
+            $this->expectExceptionMessage(sprintf('Host "%s" is blocked for "%s".', $host, $url));
         }
 
-        $previousHttpClient = $this->getHttpClientMock($url, $ipAddr, $content);
+        $previousHttpClient = $this->getMockHttpClient($ipAddr, $content);
         $client = new NoPrivateNetworkHttpClient($previousHttpClient, $subnets);
         $response = $client->request('GET', $url);
 
@@ -119,7 +120,7 @@ class NoPrivateNetworkHttpClientTest extends TestCase
             ++$executionCount;
         };
 
-        $previousHttpClient = $this->getHttpClientMock($url, $ipAddr, $content);
+        $previousHttpClient = $this->getMockHttpClient($ipAddr, $content);
         $client = new NoPrivateNetworkHttpClient($previousHttpClient);
         $response = $client->request('GET', $url, ['on_progress' => $customCallback]);
 
@@ -132,7 +133,6 @@ class NoPrivateNetworkHttpClientTest extends TestCase
     {
         $ipAddr = '104.26.14.6';
         $url = sprintf('http://%s/', $ipAddr);
-        $content = 'bar';
         $customCallback = sprintf('cb_%s', microtime(true));
 
         $this->expectException(InvalidArgumentException::class);
@@ -150,38 +150,8 @@ class NoPrivateNetworkHttpClientTest extends TestCase
         new NoPrivateNetworkHttpClient(new MockHttpClient(), 3);
     }
 
-    private function getHttpClientMock(string $url, string $ipAddr, string $content)
+    private function getMockHttpClient(string $ipAddr, string $content)
     {
-        $previousHttpClient = $this
-            ->getMockBuilder(HttpClientInterface::class)
-            ->getMock();
-
-        $previousHttpClient
-            ->expects($this->once())
-            ->method('request')
-            ->with(
-                'GET',
-                $url,
-                $this->callback(function ($options) {
-                    $this->assertArrayHasKey('on_progress', $options);
-                    $onProgress = $options['on_progress'];
-                    $this->assertIsCallable($onProgress);
-
-                    return true;
-                })
-            )
-            ->willReturnCallback(function ($method, $url, $options) use ($ipAddr, $content): ResponseInterface {
-                $info = [
-                    'primary_ip' => $ipAddr,
-                    'url' => $url,
-                ];
-
-                $onProgress = $options['on_progress'];
-                $onProgress(0, 0, $info);
-
-                return MockResponse::fromRequest($method, $url, [], new MockResponse($content));
-            });
-
-        return $previousHttpClient;
+        return new MockHttpClient(new MockResponse($content, ['primary_ip' => $ipAddr]));
     }
 }
