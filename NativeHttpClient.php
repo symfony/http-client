@@ -155,6 +155,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
 
                 $progressInfo = $info;
                 $progressInfo['url'] = implode('', $info['url']);
+                $progressInfo['resolve'] = $resolve;
                 unset($progressInfo['size_body']);
 
                 // Memoize the last progress to ease calling the callback periodically when no network transfer happens
@@ -167,7 +168,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
                     $lastProgress = $progress ?: $lastProgress;
                 }
 
-                $onProgress($lastProgress[0], $lastProgress[1], $progressInfo, $resolve);
+                $onProgress($lastProgress[0], $lastProgress[1], $progressInfo);
             };
         } elseif (0 < $options['max_duration']) {
             $maxDuration = $options['max_duration'];
@@ -352,6 +353,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
 
             $multi->dnsCache[$host] = $ip = $ip[0];
             $info['debug'] .= "* Added {$host}:0:{$ip} to DNS cache\n";
+            $host = $ip;
         } else {
             $info['debug'] .= "* Hostname was found in DNS cache\n";
             $host = str_contains($ip, ':') ? "[$ip]" : $ip;
