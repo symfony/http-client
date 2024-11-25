@@ -339,16 +339,14 @@ final class AmpResponse implements ResponseInterface, StreamableInterface
             $request->setTlsHandshakeTimeout($originRequest->getTlsHandshakeTimeout());
             $request->setTransferTimeout($originRequest->getTransferTimeout());
 
-            if (\in_array($status, [301, 302, 303], true)) {
+            if (303 === $status || \in_array($status, [301, 302], true) && 'POST' === $response->getRequest()->getMethod()) {
+                // Do like curl and browsers: turn POST to GET on 301, 302 and 303
                 $originRequest->removeHeader('transfer-encoding');
                 $originRequest->removeHeader('content-length');
                 $originRequest->removeHeader('content-type');
 
-                // Do like curl and browsers: turn POST to GET on 301, 302 and 303
-                if ('POST' === $response->getRequest()->getMethod() || 303 === $status) {
-                    $info['http_method'] = 'HEAD' === $response->getRequest()->getMethod() ? 'HEAD' : 'GET';
-                    $request->setMethod($info['http_method']);
-                }
+                $info['http_method'] = 'HEAD' === $response->getRequest()->getMethod() ? 'HEAD' : 'GET';
+                $request->setMethod($info['http_method']);
             } else {
                 $request->setBody(AmpBody::rewind($response->getRequest()->getBody()));
             }
