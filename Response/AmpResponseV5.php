@@ -99,7 +99,8 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
         $onProgress = $options['on_progress'] ?? static function () {};
         $onProgress = $this->onProgress = static function () use (&$info, $onProgress, $resolve) {
             $info['total_time'] = microtime(true) - $info['start_time'];
-            $onProgress((int) $info['size_download'], ((int) (1 + $info['download_content_length']) ?: 1) - 1, (array) $info, $resolve);
+            $info['resolve'] = $resolve;
+            $onProgress((int) $info['size_download'], ((int) (1 + $info['download_content_length']) ?: 1) - 1, (array) $info);
         };
 
         $pause = 0.0;
