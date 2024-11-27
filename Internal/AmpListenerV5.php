@@ -66,7 +66,7 @@ class AmpListenerV5 implements EventListener
 
     public function requestHeaderStart(Request $request, Stream $stream): void
     {
-        $host = $stream->getRemoteAddress()->toString();
+        $host = $stream->getRemoteAddress()->getAddress();
         $this->info['primary_ip'] = $host;
 
         if (str_contains($host, ':')) {
