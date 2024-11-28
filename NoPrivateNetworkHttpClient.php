@@ -20,7 +20,6 @@ use Symfony\Component\HttpFoundation\IpUtils;
 use Symfony\Contracts\HttpClient\ChunkInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
-use Symfony\Contracts\HttpClient\ResponseStreamInterface;
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
@@ -103,30 +102,32 @@ final class NoPrivateNetworkHttpClient implements HttpClientInterface, LoggerAwa
         $ip = self::dnsResolve($dnsCache, $host, $this->ipFlags, $options);
         self::ipCheck($ip, $this->subnets, $this->ipFlags, $host, $url);
 
-        if (0 < $maxRedirects = $options['max_redirects']) {
-            $options['max_redirects'] = 0;
-            $redirectHeaders['with_auth'] = $redirectHeaders['no_auth'] = $options['headers'];
-
-            if (isset($options['normalized_headers']['host']) || isset($options['normalized_headers']['authorization']) || isset($options['normalized_headers']['cookie'])) {
-                $redirectHeaders['no_auth'] = array_filter($redirectHeaders['no_auth'], static function ($h) {
-                    return 0 !== stripos($h, 'Host:') && 0 !== stripos($h, 'Authorization:') && 0 !== stripos($h, 'Cookie:');
-                });
-            }
-        }
-
         $onProgress = $options['on_progress'] ?? null;
         $subnets = $this->subnets;
         $ipFlags = $this->ipFlags;
         $lastPrimaryIp = '';
 
         $options['on_progress'] = static function (int $dlNow, int $dlSize, array $info) use ($onProgress, $subnets, $ipFlags, &$lastPrimaryIp): void {
-            if (($info['primary_ip'] ?? '') !== $lastPrimaryIp) {
+            if (!\in_array($info['primary_ip'] ?? '', ['', $lastPrimaryIp], true)) {
                 self::ipCheck($info['primary_ip'], $subnets, $ipFlags, null, $info['url']);
                 $lastPrimaryIp = $info['primary_ip'];
             }
 
             null !== $onProgress && $onProgress($dlNow, $dlSize, $info);
         };
+
+        if (0 >= $maxRedirects = $options['max_redirects']) {
+            return new AsyncResponse($this->client, $method, $url, $options);
+        }
+
+        $options['max_redirects'] = 0;
+        $redirectHeaders['with_auth'] = $redirectHeaders['no_auth'] = $options['headers'];
+
+        if (isset($options['normalized_headers']['host']) || isset($options['normalized_headers']['authorization']) || isset($options['normalized_headers']['cookie'])) {
+            $redirectHeaders['no_auth'] = array_filter($redirectHeaders['no_auth'], static function ($h) {
+                return 0 !== stripos($h, 'Host:') && 0 !== stripos($h, 'Authorization:') && 0 !== stripos($h, 'Cookie:');
+            });
+        }
 
         return new AsyncResponse($this->client, $method, $url, $options, static function (ChunkInterface $chunk, AsyncContext $context) use (&$method, &$options, $maxRedirects, &$redirectHeaders, $subnets, $ipFlags, $dnsCache): \Generator {
             if (null !== $chunk->getError() || $chunk->isTimeout() || !$chunk->isFirst()) {
@@ -176,14 +177,6 @@ final class NoPrivateNetworkHttpClient implements HttpClientInterface, LoggerAwa
                 $context->passthru();
             }
         });
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function stream($responses, ?float $timeout = null): ResponseStreamInterface
-    {
-        return $this->client->stream($responses, $timeout);
     }
 
     /**
