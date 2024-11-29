@@ -518,6 +518,73 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         $client->request('GET', 'http://localhost:8057/302?location=https://symfony.com/');
     }
 
+    public function testNoPrivateNetwork304()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+        $client = new NoPrivateNetworkHttpClient($client, '104.26.14.6/32');
+        $response = $client->request('GET', 'http://localhost:8057/304', [
+            'headers' => ['If-Match' => '"abc"'],
+            'buffer' => false,
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+    }
+
+    public function testNoPrivateNetwork302()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+        $client = new NoPrivateNetworkHttpClient($client, '104.26.14.6/32');
+        $response = $client->request('GET', 'http://localhost:8057/302/relative');
+
+        $body = $response->toArray();
+
+        $this->assertSame('/', $body['REQUEST_URI']);
+        $this->assertNull($response->getInfo('redirect_url'));
+
+        $response = $client->request('GET', 'http://localhost:8057/302/relative', [
+            'max_redirects' => 0,
+        ]);
+
+        $this->assertSame(302, $response->getStatusCode());
+        $this->assertSame('http://localhost:8057/', $response->getInfo('redirect_url'));
+    }
+
+    public function testNoPrivateNetworkStream()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+
+        $response = $client->request('GET', 'http://localhost:8057');
+        $client = new NoPrivateNetworkHttpClient($client, '104.26.14.6/32');
+
+        $response = $client->request('GET', 'http://localhost:8057');
+        $chunks = $client->stream($response);
+        $result = [];
+
+        foreach ($chunks as $r => $chunk) {
+            if ($chunk->isTimeout()) {
+                $result[] = 't';
+            } elseif ($chunk->isLast()) {
+                $result[] = 'l';
+            } elseif ($chunk->isFirst()) {
+                $result[] = 'f';
+            }
+        }
+
+        $this->assertSame($response, $r);
+        $this->assertSame(['f', 'l'], $result);
+
+        $chunk = null;
+        $i = 0;
+
+        foreach ($client->stream($response) as $chunk) {
+            ++$i;
+        }
+
+        $this->assertSame(1, $i);
+        $this->assertTrue($chunk->isLast());
+    }
+
     public function testNoRedirectWithInvalidLocation()
     {
         $client = $this->getHttpClient(__FUNCTION__);
