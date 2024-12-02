@@ -651,4 +651,26 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
 
         $this->assertSame(['abc' => 'def', 'content-type' => 'application/json', 'REQUEST_METHOD' => 'POST'], $response->toArray());
     }
+
+    public function testHeadRequestWithClosureBody()
+    {
+        $p = TestHttpServer::start(8067);
+
+        try {
+            $client = $this->getHttpClient(__FUNCTION__);
+
+            $response = $client->request('HEAD', 'http://localhost:8057/head', [
+                'body' => fn () => '',
+            ]);
+            $headers = $response->getHeaders();
+        } finally {
+            $p->stop();
+        }
+
+        $this->assertArrayHasKey('x-request-vars', $headers);
+
+        $vars = json_decode($headers['x-request-vars'][0], true);
+        $this->assertIsArray($vars);
+        $this->assertSame('HEAD', $vars['REQUEST_METHOD']);
+    }
 }
