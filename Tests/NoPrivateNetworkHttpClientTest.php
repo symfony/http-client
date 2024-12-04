@@ -68,6 +68,7 @@ class NoPrivateNetworkHttpClientTest extends TestCase
 
     /**
      * @dataProvider getExcludeIpData
+     *
      * @group dns-sensitive
      */
     public function testExcludeByIp(string $ipAddr, $subnets, bool $mustThrow)
@@ -105,6 +106,7 @@ class NoPrivateNetworkHttpClientTest extends TestCase
 
     /**
      * @dataProvider getExcludeHostData
+     *
      * @group dns-sensitive
      */
     public function testExcludeByHost(string $ipAddr, $subnets, bool $mustThrow)
