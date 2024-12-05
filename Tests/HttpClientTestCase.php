@@ -673,4 +673,26 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         $this->assertIsArray($vars);
         $this->assertSame('HEAD', $vars['REQUEST_METHOD']);
     }
+
+    /**
+     * @testWith [301]
+     *           [302]
+     *           [303]
+     */
+    public function testPostToGetRedirect(int $status)
+    {
+        $p = TestHttpServer::start(8067);
+
+        try {
+            $client = $this->getHttpClient(__FUNCTION__);
+
+            $response = $client->request('POST', 'http://localhost:8057/custom?status=' . $status . '&headers[]=Location%3A%20%2F');
+            $body = $response->toArray();
+        } finally {
+            $p->stop();
+        }
+
+        $this->assertSame('GET', $body['REQUEST_METHOD']);
+        $this->assertSame('/', $body['REQUEST_URI']);
+    }
 }
