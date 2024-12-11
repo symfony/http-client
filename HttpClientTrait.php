@@ -650,7 +650,7 @@ trait HttpClientTrait
         $tail = '';
 
         if (false === $parts = parse_url(\strlen($url) !== strcspn($url, '?#') ? $url : $url.$tail = '#')) {
-            throw new InvalidArgumentException(sprintf('Malformed URL "%s".', $url));
+            throw new InvalidArgumentException(\sprintf('Malformed URL "%s".', $url));
         }
 
         if ($query) {
