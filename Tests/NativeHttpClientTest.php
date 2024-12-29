@@ -48,4 +48,9 @@ class NativeHttpClientTest extends HttpClientTestCase
     {
         $this->markTestSkipped('NativeHttpClient doesn\'t support HTTP/2.');
     }
+
+    public function testUnixSocket()
+    {
+        $this->markTestSkipped('NativeHttpClient doesn\'t support binding to unix sockets.');
+    }
 }
