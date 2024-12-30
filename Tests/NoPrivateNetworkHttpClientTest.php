@@ -175,6 +175,27 @@ class NoPrivateNetworkHttpClientTest extends TestCase
         $client->request('GET', $url, ['on_progress' => $customCallback]);
     }
 
+    public function testHeadersArePassedOnRedirect()
+    {
+        $ipAddr = '104.26.14.6';
+        $url = sprintf('http://%s/', $ipAddr);
+        $content = 'foo';
+
+        $callback = function ($method, $url, $options) use ($content): MockResponse {
+            $this->assertArrayHasKey('headers', $options);
+            $this->assertNotContains('content-type: application/json', $options['headers']);
+            $this->assertContains('foo: bar', $options['headers']);
+            return new MockResponse($content);
+        };
+        $responses = [
+            new MockResponse('', ['http_code' => 302, 'redirect_url' => 'http://104.26.14.7']),
+            $callback,
+        ];
+        $client = new NoPrivateNetworkHttpClient(new MockHttpClient($responses));
+        $response = $client->request('POST', $url, ['headers' => ['foo' => 'bar', 'content-type' => 'application/json']]);
+        $this->assertEquals($content, $response->getContent());
+    }
+
     private function getMockHttpClient(string $ipAddr, string $content)
     {
         return new MockHttpClient(new MockResponse($content, ['primary_ip' => $ipAddr]));
