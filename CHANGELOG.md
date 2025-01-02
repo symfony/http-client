@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+7.3
+---
+
+ * Add IPv6 support to `NativeHttpClient`
+
 7.2
 ---
 
