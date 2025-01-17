@@ -226,7 +226,11 @@ final class HttplugClient implements ClientInterface, HttpAsyncClient, RequestFa
             $body = $request->getBody();
 
             if ($body->isSeekable()) {
-                $body->seek(0);
+                try {
+                    $body->seek(0);
+                } catch (\RuntimeException) {
+                    // ignore
+                }
             }
 
             $headers = $request->getHeaders();
