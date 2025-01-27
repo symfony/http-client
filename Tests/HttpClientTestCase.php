@@ -695,4 +695,17 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         $this->assertSame('GET', $body['REQUEST_METHOD']);
         $this->assertSame('/', $body['REQUEST_URI']);
     }
+
+    public function testResponseCanBeProcessedAfterClientReset()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+        $response = $client->request('GET', 'http://127.0.0.1:8057/timeout-body');
+        $stream = $client->stream($response);
+
+        $response->getStatusCode();
+        $client->reset();
+        $stream->current();
+
+        $this->addToAssertionCount(1);
+    }
 }
