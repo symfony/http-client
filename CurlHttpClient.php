@@ -237,7 +237,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
 
         if (!\is_string($body)) {
             if (\is_resource($body)) {
-                $curlopts[\CURLOPT_INFILE] = $body;
+                $curlopts[\CURLOPT_READDATA] = $body;
             } else {
                 $curlopts[\CURLOPT_READFUNCTION] = static function ($ch, $fd, $length) use ($body) {
                     static $eof = false;
@@ -316,6 +316,9 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
         }
 
         foreach ($curlopts as $opt => $value) {
+            if (\CURLOPT_INFILESIZE === $opt && $value >= 1 << 31) {
+                $opt = 115; // 115 === CURLOPT_INFILESIZE_LARGE, but it's not defined in PHP
+            }
             if (null !== $value && !curl_setopt($ch, $opt, $value) && \CURLOPT_CERTINFO !== $opt && (!\defined('CURLOPT_HEADEROPT') || \CURLOPT_HEADEROPT !== $opt)) {
                 $constantName = $this->findConstantName($opt);
                 throw new TransportException(sprintf('Curl option "%s" is not supported.', $constantName ?? $opt));
@@ -472,7 +475,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             \CURLOPT_RESOLVE => 'resolve',
             \CURLOPT_NOSIGNAL => 'timeout',
             \CURLOPT_HTTPHEADER => 'headers',
-            \CURLOPT_INFILE => 'body',
+            \CURLOPT_READDATA => 'body',
             \CURLOPT_READFUNCTION => 'body',
             \CURLOPT_INFILESIZE => 'body',
             \CURLOPT_POSTFIELDS => 'body',
