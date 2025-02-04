@@ -316,8 +316,8 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
         }
 
         foreach ($curlopts as $opt => $value) {
-            if (\CURLOPT_INFILESIZE === $opt && $value >= 1 << 31) {
-                $opt = 115; // 115 === CURLOPT_INFILESIZE_LARGE, but it's not defined in PHP
+            if (\PHP_INT_SIZE === 8 && \defined('CURLOPT_INFILESIZE_LARGE') && \CURLOPT_INFILESIZE === $opt && $value >= 1 << 31) {
+                $opt = \CURLOPT_INFILESIZE_LARGE;
             }
             if (null !== $value && !curl_setopt($ch, $opt, $value) && \CURLOPT_CERTINFO !== $opt && (!\defined('CURLOPT_HEADEROPT') || \CURLOPT_HEADEROPT !== $opt)) {
                 $constantName = $this->findConstantName($opt);
