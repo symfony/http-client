@@ -227,11 +227,13 @@ final class HttplugClient implements ClientInterface, HttpAsyncClient, RequestFa
             $headers = $request->getHeaders();
 
             $size = $request->getHeader('content-length')[0] ?? -1;
-            if (0 > $size && 0 <= $size = $body->getSize() ?? -1) {
+            if (0 > $size && 0 < $size = $body->getSize() ?? -1) {
                 $headers['Content-Length'] = [$size];
             }
 
-            if (0 <= $size && $size < 1 << 21) {
+            if (0 === $size) {
+                $body = '';
+            } elseif (0 < $size && $size < 1 << 21) {
                 if ($body->isSeekable()) {
                     try {
                         $body->seek(0);
