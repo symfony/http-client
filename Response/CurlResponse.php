@@ -265,11 +265,11 @@ final class CurlResponse implements ResponseInterface, StreamableInterface
     /**
      * @param CurlClientState $multi
      */
-    private static function perform(ClientState $multi, ?array &$responses = null): void
+    private static function perform(ClientState $multi, ?array $responses = null): void
     {
         if ($multi->performing) {
             if ($responses) {
-                $response = current($responses);
+                $response = $responses[array_key_first($responses)];
                 $multi->handlesActivity[(int) $response->handle][] = null;
                 $multi->handlesActivity[(int) $response->handle][] = new TransportException(sprintf('Userland callback cannot use the client nor the response while processing "%s".', curl_getinfo($response->handle, \CURLINFO_EFFECTIVE_URL)));
             }
