@@ -229,7 +229,7 @@ final class NativeResponse implements ResponseInterface, StreamableInterface
     /**
      * @param NativeClientState $multi
      */
-    private static function perform(ClientState $multi, ?array &$responses = null): void
+    private static function perform(ClientState $multi, ?array $responses = null): void
     {
         foreach ($multi->openHandles as $i => [$pauseExpiry, $h, $buffer, $onProgress]) {
             if ($pauseExpiry) {
