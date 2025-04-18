@@ -39,7 +39,7 @@ final class TraceableHttpClient implements HttpClientInterface, ResetInterface, 
     {
         $content = null;
         $traceInfo = [];
-        $this->tracedRequests[] = [
+        $tracedRequest = [
             'method' => $method,
             'url' => $url,
             'options' => $options,
@@ -51,7 +51,9 @@ final class TraceableHttpClient implements HttpClientInterface, ResetInterface, 
         if (false === ($options['extra']['trace_content'] ?? true)) {
             unset($content);
             $content = false;
+            unset($tracedRequest['options']['body'], $tracedRequest['options']['json']);
         }
+        $this->tracedRequests[] = $tracedRequest;
 
         $options['on_progress'] = function (int $dlNow, int $dlSize, array $info) use (&$traceInfo, $onProgress) {
             $traceInfo = $info;
