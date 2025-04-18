@@ -31,12 +31,17 @@ final class TraceableHttpClient implements HttpClientInterface, ResetInterface, 
     public function __construct(
         private HttpClientInterface $client,
         private ?Stopwatch $stopwatch = null,
+        private ?\Closure $disabled = null,
     ) {
         $this->tracedRequests = new \ArrayObject();
     }
 
     public function request(string $method, string $url, array $options = []): ResponseInterface
     {
+        if ($this->disabled?->__invoke()) {
+            return new TraceableResponse($this->client, $this->client->request($method, $url, $options));
+        }
+
         $content = null;
         $traceInfo = [];
         $this->tracedRequests[] = [
