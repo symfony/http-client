@@ -205,7 +205,6 @@ final class CurlResponse implements ResponseInterface, StreamableInterface
     {
         if (!$info = $this->finalInfo) {
             $info = array_merge($this->info, curl_getinfo($this->handle));
-            $info['url'] = $this->info['url'] ?? $info['url'];
             $info['redirect_url'] = $this->info['redirect_url'] ?? null;
 
             // workaround curl not subtracting the time offset for pushed responses
@@ -221,6 +220,7 @@ final class CurlResponse implements ResponseInterface, StreamableInterface
                 rewind($this->debugBuffer);
                 ftruncate($this->debugBuffer, 0);
             }
+            $this->info = array_merge($this->info, $info);
             $waitFor = curl_getinfo($this->handle, \CURLINFO_PRIVATE);
 
             if ('H' !== $waitFor[0] && 'C' !== $waitFor[0]) {
