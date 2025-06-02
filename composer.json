@@ -37,12 +37,12 @@
         "php-http/httplug": "^1.0|^2.0",
         "psr/http-client": "^1.0",
         "symfony/amphp-http-client-meta": "^1.0|^2.0",
-        "symfony/dependency-injection": "^6.4|^7.0",
-        "symfony/http-kernel": "^6.4|^7.0",
-        "symfony/messenger": "^6.4|^7.0",
-        "symfony/process": "^6.4|^7.0",
-        "symfony/rate-limiter": "^6.4|^7.0",
-        "symfony/stopwatch": "^6.4|^7.0"
+        "symfony/dependency-injection": "^6.4|^7.0|^8.0",
+        "symfony/http-kernel": "^6.4|^7.0|^8.0",
+        "symfony/messenger": "^6.4|^7.0|^8.0",
+        "symfony/process": "^6.4|^7.0|^8.0",
+        "symfony/rate-limiter": "^6.4|^7.0|^8.0",
+        "symfony/stopwatch": "^6.4|^7.0|^8.0"
     },
     "conflict": {
         "amphp/amp": "<2.5",
