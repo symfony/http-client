@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+8.0
+---
+
+ * Remove support for amphp/http-client < 5
+
 7.4
 ---
 
