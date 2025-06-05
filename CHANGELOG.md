@@ -5,6 +5,7 @@ CHANGELOG
 ---
 
  * Remove support for amphp/http-client < 5
+ * Remove setLogger() methods on decorators; configure the logger on the wrapped client directly instead
 
 7.4
 ---
