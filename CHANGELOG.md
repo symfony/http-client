@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+7.4
+---
+
+ * Deprecate using amphp/http-client < 5
+
 7.3
 ---
 

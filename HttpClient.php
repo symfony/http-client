@@ -62,7 +62,7 @@ final class HttpClient
             return new AmpHttpClient($defaultOptions, null, $maxHostConnections, $maxPendingPushes);
         }
 
-        @trigger_error((\extension_loaded('curl') ? 'Upgrade' : 'Install').' the curl extension or run "composer require amphp/http-client:^4.2.1" to perform async HTTP operations, including full HTTP/2 support', \E_USER_NOTICE);
+        @trigger_error((\extension_loaded('curl') ? 'Upgrade' : 'Install').' the curl extension or run "composer require amphp/http-client:^5" to perform async HTTP operations, including full HTTP/2 support', \E_USER_NOTICE);
 
         return new NativeHttpClient($defaultOptions, $maxHostConnections);
     }
