@@ -25,8 +25,8 @@ use Symfony\Component\HttpClient\Chunk\InformationalChunk;
 use Symfony\Component\HttpClient\Exception\InvalidArgumentException;
 use Symfony\Component\HttpClient\Exception\TransportException;
 use Symfony\Component\HttpClient\HttpClientTrait;
-use Symfony\Component\HttpClient\Internal\AmpBodyV5;
-use Symfony\Component\HttpClient\Internal\AmpClientStateV5;
+use Symfony\Component\HttpClient\Internal\AmpBody;
+use Symfony\Component\HttpClient\Internal\AmpClientState;
 use Symfony\Component\HttpClient\Internal\Canary;
 use Symfony\Component\HttpClient\Internal\ClientState;
 use Symfony\Contracts\HttpClient\ResponseInterface;
@@ -39,7 +39,7 @@ use function Amp\Future\awaitFirst;
  *
  * @internal
  */
-final class AmpResponseV5 implements ResponseInterface, StreamableInterface
+final class AmpResponse implements ResponseInterface, StreamableInterface
 {
     use CommonResponseTrait;
     use TransportResponseTrait;
@@ -53,7 +53,7 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
      * @internal
      */
     public function __construct(
-        private AmpClientStateV5 $multi,
+        private AmpClientState $multi,
         Request $request,
         array $options,
         ?LoggerInterface $logger,
@@ -160,7 +160,7 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
     }
 
     /**
-     * @param AmpClientStateV5 $multi
+     * @param AmpClientState $multi
      */
     private static function perform(ClientState $multi, ?array $responses = null): void
     {
@@ -180,7 +180,7 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
     }
 
     /**
-     * @param AmpClientStateV5 $multi
+     * @param AmpClientState $multi
      */
     private static function select(ClientState $multi, float $timeout): int
     {
@@ -205,7 +205,7 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
         return 1;
     }
 
-    private static function generateResponse(Request $request, AmpClientStateV5 $multi, string $id, array &$info, array &$headers, DeferredCancellation $canceller, array &$options, \Closure $onProgress, &$handle, ?LoggerInterface $logger, float &$pause): void
+    private static function generateResponse(Request $request, AmpClientState $multi, string $id, array &$info, array &$headers, DeferredCancellation $canceller, array &$options, \Closure $onProgress, &$handle, ?LoggerInterface $logger, float &$pause): void
     {
         $request->setInformationalResponseHandler(static function (Response $response) use ($multi, $id, &$info, &$headers) {
             self::addResponseHeaders($response, $info, $headers);
@@ -265,13 +265,13 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
         }
     }
 
-    private static function followRedirects(Request $originRequest, AmpClientStateV5 $multi, array &$info, array &$headers, DeferredCancellation $canceller, array $options, \Closure $onProgress, &$handle, ?LoggerInterface $logger, float &$pause): ?Response
+    private static function followRedirects(Request $originRequest, AmpClientState $multi, array &$info, array &$headers, DeferredCancellation $canceller, array $options, \Closure $onProgress, &$handle, ?LoggerInterface $logger, float &$pause): ?Response
     {
         if (0 < $pause) {
             delay($pause, true, $canceller->getCancellation());
         }
 
-        $originRequest->setBody(new AmpBodyV5($options['body'], $info, $onProgress));
+        $originRequest->setBody(new AmpBody($options['body'], $info, $onProgress));
         $response = $multi->request($options, $originRequest, $canceller->getCancellation(), $info, $onProgress, $handle);
         $previousUrl = null;
 
@@ -334,7 +334,7 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
                     $request->setMethod($info['http_method']);
                 }
             } else {
-                $request->setBody(AmpBodyV5::rewind($response->getRequest()->getBody()));
+                $request->setBody(AmpBody::rewind($response->getRequest()->getBody()));
             }
 
             foreach ($originRequest->getHeaderPairs() as [$name, $value]) {
@@ -382,7 +382,7 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
     /**
      * Accepts pushed responses only if their headers related to authentication match the request.
      */
-    private static function getPushedResponse(Request $request, AmpClientStateV5 $multi, array &$info, array &$headers, DeferredCancellation $canceller, array $options, ?LoggerInterface $logger): ?Response
+    private static function getPushedResponse(Request $request, AmpClientState $multi, array &$info, array &$headers, DeferredCancellation $canceller, array $options, ?LoggerInterface $logger): ?Response
     {
         if ('' !== $options['body']) {
             return null;

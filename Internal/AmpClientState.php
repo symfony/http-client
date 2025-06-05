@@ -41,7 +41,7 @@ use Psr\Log\LoggerInterface;
  *
  * @internal
  */
-final class AmpClientStateV5 extends ClientState
+final class AmpClientState extends ClientState
 {
     public array $dnsCache = [];
     public int $responseCount = 0;
@@ -87,7 +87,7 @@ final class AmpClientStateV5 extends ClientState
             $info['peer_certificate_chain'] = [];
         }
 
-        $request->addEventListener(new AmpListenerV5($info, $options['peer_fingerprint']['pin-sha256'] ?? [], $onProgress, $handle));
+        $request->addEventListener(new AmpListener($info, $options['peer_fingerprint']['pin-sha256'] ?? [], $onProgress, $handle));
         $request->setPushHandler(fn ($request, $response) => $this->handlePush($request, $response, $options));
 
         if (0 <= $bodySize = $request->hasHeader('content-length') ? (int) $request->getHeader('content-length') : $request->getBody()->getContentLength() ?? -1) {
@@ -145,7 +145,7 @@ final class AmpClientStateV5 extends ClientState
                 return $socket;
             }
         };
-        $connector->connector = new DnsSocketConnector(new AmpResolverV5($this->dnsCache));
+        $connector->connector = new DnsSocketConnector(new AmpResolver($this->dnsCache));
 
         $context = (new ConnectContext())
             ->withTcpNoDelay()

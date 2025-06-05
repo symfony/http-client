@@ -24,7 +24,7 @@ use Symfony\Component\HttpClient\Exception\TransportException;
  *
  * @internal
  */
-class AmpBodyV5 implements HttpContent, ReadableStream, \IteratorAggregate
+class AmpBody implements HttpContent, ReadableStream, \IteratorAggregate
 {
     private ReadableStream $body;
     private ?string $content;

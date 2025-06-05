@@ -23,7 +23,7 @@ use Amp\Dns\DnsResolver;
  *
  * @internal
  */
-class AmpResolverV5 implements DnsResolver
+class AmpResolver implements DnsResolver
 {
     public function __construct(
         private array &$dnsMap,
