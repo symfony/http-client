@@ -28,7 +28,7 @@
         "symfony/service-contracts": "^2.5|^3"
     },
     "require-dev": {
-        "amphp/http-client": "^5.0",
+        "amphp/http-client": "^5.3.2",
         "amphp/http-tunnel": "^2.0",
         "guzzlehttp/promises": "^1.4|^2.0",
         "nyholm/psr7": "^1.0",

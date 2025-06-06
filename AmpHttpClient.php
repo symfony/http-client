@@ -159,7 +159,7 @@ final class AmpHttpClient implements HttpClientInterface, LoggerAwareInterface, 
 
         foreach ($this->multi->pushedResponses as $pushedResponses) {
             foreach ($pushedResponses as [$pushedUrl, $pushDeferred]) {
-                $pushDeferred->fail(new CancelledException());
+                $pushDeferred->error(new CancelledException());
 
                 $this->logger?->debug(\sprintf('Unused pushed response: "%s"', $pushedUrl));
             }
