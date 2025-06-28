@@ -19,6 +19,14 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  */
 class AmpHttpClientTest extends HttpClientTestCase
 {
+    /**
+     * @group transient
+     */
+    public function testNonBlockingStream()
+    {
+        parent::testNonBlockingStream();
+    }
+
     protected function getHttpClient(string $testCase): HttpClientInterface
     {
         return new AmpHttpClient(['verify_peer' => false, 'verify_host' => false, 'timeout' => 5]);
