@@ -240,6 +240,10 @@ final class AmpResponse implements ResponseInterface, StreamableInterface
             $body = $response->getBody();
 
             while (true) {
+                if (!isset($multi->openHandles[$id])) {
+                    return;
+                }
+
                 $multi->openHandles[$id]->complete();
                 $multi->openHandles[$id] = new DeferredFuture();
 
