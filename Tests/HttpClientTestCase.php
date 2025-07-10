@@ -691,7 +691,7 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         try {
             $client = $this->getHttpClient(__FUNCTION__);
 
-            $response = $client->request('POST', 'http://localhost:8057/custom?status=' . $status . '&headers[]=Location%3A%20%2F');
+            $response = $client->request('POST', 'http://localhost:8057/custom?status='.$status.'&headers[]=Location%3A%20%2F');
             $body = $response->toArray();
         } finally {
             $p->stop();
