@@ -142,7 +142,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
             $maxDuration = 0 < $options['max_duration'] ? $options['max_duration'] : \INF;
             $onProgress = static function (...$progress) use ($onProgress, &$info, $maxDuration) {
                 if ($info['total_time'] >= $maxDuration) {
-                    throw new TransportException(sprintf('Max duration was reached for "%s".', implode('', $info['url'])));
+                    throw new TransportException(\sprintf('Max duration was reached for "%s".', implode('', $info['url'])));
                 }
 
                 $progressInfo = $info;
@@ -165,7 +165,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
             $maxDuration = $options['max_duration'];
             $onProgress = static function () use (&$info, $maxDuration): void {
                 if ($info['total_time'] >= $maxDuration) {
-                    throw new TransportException(sprintf('Max duration was reached for "%s".', implode('', $info['url'])));
+                    throw new TransportException(\sprintf('Max duration was reached for "%s".', implode('', $info['url'])));
                 }
             };
         }
@@ -195,7 +195,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
             $this->multi->dnsCache = $options['resolve'] + $this->multi->dnsCache;
         }
 
-        $this->logger?->info(sprintf('Request: "%s %s"', $method, implode('', $url)));
+        $this->logger?->info(\sprintf('Request: "%s %s"', $method, implode('', $url)));
 
         if (!isset($options['normalized_headers']['user-agent'])) {
             $options['headers'][] = 'User-Agent: Symfony HttpClient (Native)';
@@ -301,7 +301,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
 
         while ('' !== $data = $body(self::$CHUNK_SIZE)) {
             if (!\is_string($data)) {
-                throw new TransportException(sprintf('Return value of the "body" option callback must be string, "%s" returned.', get_debug_type($data)));
+                throw new TransportException(\sprintf('Return value of the "body" option callback must be string, "%s" returned.', get_debug_type($data)));
             }
 
             $result .= $data;
@@ -340,7 +340,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
             $now = microtime(true);
 
             if (!$ip = gethostbynamel($host)) {
-                throw new TransportException(sprintf('Could not resolve host "%s".', $host));
+                throw new TransportException(\sprintf('Could not resolve host "%s".', $host));
             }
 
             $multi->dnsCache[$host] = $ip = $ip[0];

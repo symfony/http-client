@@ -42,7 +42,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     public function __construct(HttpClientInterface $client, StoreInterface $store, array $defaultOptions = [])
     {
         if (!class_exists(HttpClientKernel::class)) {
-            throw new \LogicException(sprintf('Using "%s" requires the HttpKernel component, try running "composer require symfony/http-kernel".', __CLASS__));
+            throw new \LogicException(\sprintf('Using "%s" requires the HttpKernel component, try running "composer require symfony/http-kernel".', __CLASS__));
         }
 
         $this->client = $client;

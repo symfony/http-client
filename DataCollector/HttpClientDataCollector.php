@@ -233,8 +233,8 @@ final class HttpClientDataCollector extends DataCollector implements LateDataCol
             }
 
             if (preg_match('/^> ([A-Z]+)/', $line, $match)) {
-                $command[] = sprintf('--request %s', $match[1]);
-                $command[] = sprintf('--url %s', escapeshellarg($url));
+                $command[] = \sprintf('--request %s', $match[1]);
+                $command[] = \sprintf('--url %s', escapeshellarg($url));
                 continue;
             }
 
@@ -252,7 +252,7 @@ final class HttpClientDataCollector extends DataCollector implements LateDataCol
     {
         static $useProcess;
 
-        if ($useProcess ??= function_exists('proc_open') && class_exists(Process::class)) {
+        if ($useProcess ??= \function_exists('proc_open') && class_exists(Process::class)) {
             return substr((new Process(['', $payload]))->getCommandLine(), 3);
         }
 
