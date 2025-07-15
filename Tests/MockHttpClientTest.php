@@ -512,7 +512,7 @@ class MockHttpClientTest extends HttpClientTestCase
 
     public function testChangeResponseFactory()
     {
-        /* @var MockHttpClient $client */
+        /** @var MockHttpClient $client */
         $client = $this->getHttpClient(__METHOD__);
         $expectedBody = '{"foo": "bar"}';
         $client->setResponseFactory(new MockResponse($expectedBody));
