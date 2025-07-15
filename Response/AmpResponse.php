@@ -215,6 +215,7 @@ final class AmpResponse implements ResponseInterface, StreamableInterface
         });
 
         try {
+            /** @var Response $response */
             if (null === $response = self::getPushedResponse($request, $multi, $info, $headers, $canceller, $options, $logger)) {
                 $logger?->info(\sprintf('Request: "%s %s"', $info['http_method'], $info['url']));
 
