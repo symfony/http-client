@@ -131,9 +131,7 @@ final class AmpHttpClient implements HttpClientInterface, LoggerAwareInterface, 
         $request->setTcpConnectTimeout($options['timeout']);
         $request->setTlsHandshakeTimeout($options['timeout']);
         $request->setTransferTimeout($options['max_duration']);
-        if (method_exists($request, 'setInactivityTimeout')) {
-            $request->setInactivityTimeout(0);
-        }
+        $request->setInactivityTimeout(0);
 
         if ('' !== $request->getUri()->getUserInfo() && !$request->hasHeader('authorization')) {
             $auth = explode(':', $request->getUri()->getUserInfo(), 2);
