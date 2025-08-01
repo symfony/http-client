@@ -11,7 +11,6 @@
 
 namespace Symfony\Component\HttpClient;
 
-use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpClient\Response\ResponseStream;
 use Symfony\Component\HttpClient\Response\TraceableResponse;
 use Symfony\Component\Stopwatch\Stopwatch;

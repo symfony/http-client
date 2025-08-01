@@ -12,7 +12,6 @@
 namespace Symfony\Component\HttpClient;
 
 use Amp\Http\Client\Request as AmpRequest;
-use Amp\Http\HttpMessage;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
