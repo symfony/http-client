@@ -11,6 +11,8 @@
 
 namespace Symfony\Component\HttpClient\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\Chunk\DataChunk;
 use Symfony\Component\HttpClient\Chunk\ErrorChunk;
@@ -29,11 +31,9 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  */
 class EventSourceHttpClientTest extends TestCase
 {
-    /**
-     * @testWith ["\n"]
-     *           ["\r"]
-     *           ["\r\n"]
-     */
+    #[TestWith(["\n"])]
+    #[TestWith(["\r"])]
+    #[TestWith(["\r\n"])]
     public function testGetServerSentEvents(string $sep)
     {
         $es = new EventSourceHttpClient(new MockHttpClient(function (string $method, string $url, array $options) use ($sep): MockResponse {
@@ -135,9 +135,7 @@ TXT
         $res = $es->connect('http://localhost:8080/events', ['body' => 'mybody'], 'POST');
     }
 
-    /**
-     * @dataProvider contentTypeProvider
-     */
+    #[DataProvider('contentTypeProvider')]
     public function testContentType($contentType, $expected)
     {
         $chunk = new DataChunk(0, '');
