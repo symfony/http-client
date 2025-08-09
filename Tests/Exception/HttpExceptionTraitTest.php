@@ -26,10 +26,10 @@ class HttpExceptionTraitTest extends TestCase
         $errorWithoutMessage = 'HTTP/1.1 400 Bad Request returned for "http://example.com".';
 
         $errorWithMessage = <<<ERROR
-An error occurred
+            An error occurred
 
-Some details
-ERROR;
+            Some details
+            ERROR;
 
         yield ['application/ld+json', '{"hydra:title": "An error occurred", "hydra:description": "Some details"}', $errorWithMessage];
         yield ['application/problem+json', '{"title": "An error occurred", "detail": "Some details"}', $errorWithMessage];
