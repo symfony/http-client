@@ -83,7 +83,6 @@ final class CurlClientState extends ClientState
         foreach ($this->pushedResponses as $url => $response) {
             $this->logger?->debug(\sprintf('Unused pushed response: "%s"', $url));
             curl_multi_remove_handle($this->handle, $response->handle);
-            curl_close($response->handle);
         }
 
         $this->pushedResponses = [];
