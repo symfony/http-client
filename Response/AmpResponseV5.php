@@ -96,7 +96,8 @@ final class AmpResponseV5 implements ResponseInterface, StreamableInterface
         };
 
         $pause = 0.0;
-        $this->id = $id = self::$nextId++;
+        $this->id = $id = self::$nextId;
+        self::$nextId = str_increment(self::$nextId);
 
         $info['pause_handler'] = static function (float $duration) use (&$pause) {
             $pause = $duration;
