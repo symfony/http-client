@@ -99,7 +99,8 @@ final class AmpResponse implements ResponseInterface, StreamableInterface
 
         $throttleWatcher = null;
 
-        $this->id = $id = self::$nextId++;
+        $this->id = $id = self::$nextId;
+        self::$nextId = str_increment(self::$nextId);
         Loop::defer(static function () use ($request, $multi, $id, &$info, &$headers, $canceller, &$options, $onProgress, &$handle, $logger, &$pause) {
             return new Coroutine(self::generateResponse($request, $multi, $id, $info, $headers, $canceller, $options, $onProgress, $handle, $logger, $pause));
         });
