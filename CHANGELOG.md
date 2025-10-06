@@ -4,6 +4,7 @@ CHANGELOG
 8.0
 ---
 
+ * Remove support for passing an instance of `StoreInterface` as `$cache` argument to `CachingHttpClient` constructor, use a `TagAwareCacheInterface` instead
  * Remove support for amphp/http-client < 5
  * Remove setLogger() methods on decorators; configure the logger on the wrapped client directly instead
 
