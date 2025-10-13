@@ -7,6 +7,7 @@ CHANGELOG
  * Deprecate using amphp/http-client < 5
  * Add RFC 9111–based caching support to `CachingHttpClient`
  * Deprecate passing an instance of `StoreInterface` as `$cache` argument to `CachingHttpClient` constructor
+ * Add option `auto_upgrade_http_version` to control how the request HTTP version is handled in `HttplugClient` and `Psr18Client`
 
 7.3
 ---
