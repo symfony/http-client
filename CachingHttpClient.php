@@ -687,16 +687,21 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             return false;
         }
 
-        if (
-            $this->sharedCache
-            && !isset($cacheControl['public']) && !isset($cacheControl['s-maxage']) && !isset($cacheControl['must-revalidate'])
-            && isset($requestHeaders['authorization'])
-        ) {
-            return false;
-        }
+        if ($this->sharedCache) {
+            if (
+                !isset($cacheControl['public']) && !isset($cacheControl['s-maxage']) && !isset($cacheControl['must-revalidate'])
+                && isset($requestHeaders['authorization'])
+            ) {
+                return false;
+            }
 
-        if ($this->sharedCache && isset($cacheControl['private'])) {
-            return false;
+            if (isset($cacheControl['private'])) {
+                return false;
+            }
+
+            if (isset($responseHeaders['authentication-info']) || isset($responseHeaders['set-cookie']) || isset($responseHeaders['www-authenticate'])) {
+                return false;
+            }
         }
 
         // Conditionals require an explicit expiration

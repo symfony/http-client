@@ -473,6 +473,62 @@ class CachingHttpClientTest extends TestCase
         self::assertSame('foo', $response->getContent());
     }
 
+    public function testASharedCacheDoesntStoreAResponseWithAuthenticationHeader()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                    'Set-Cookie' => 'foo=bar',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+            sharedCache: true,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('bar', $response->getContent());
+    }
+
+    public function testAPrivateCacheStoresAResponseWithAuthenticationHeader()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                    'Set-Cookie' => 'foo=bar',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+            sharedCache: false,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('foo', $response->getContent());
+    }
+
     public function testCacheMissAfterInvalidation()
     {
         $mockClient = new MockHttpClient([
