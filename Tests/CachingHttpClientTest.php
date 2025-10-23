@@ -92,6 +92,9 @@ class CachingHttpClientTest extends TestCase
         $mockClient = new MockHttpClient([
             new MockResponse('foo', [
                 'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
             ]),
             new MockResponse('should not be served'),
         ]);
@@ -119,6 +122,7 @@ class CachingHttpClientTest extends TestCase
             new MockResponse('foo', [
                 'http_code' => 200,
                 'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
                     'Vary' => 'Foo, Bar',
                 ],
             ]),
@@ -176,6 +180,34 @@ class CachingHttpClientTest extends TestCase
         self::assertSame('foo', $response->getContent());
 
         sleep(1);
+
+        // After an extra second the cache expires, so a new response is served.
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('bar', $response->getContent());
+    }
+
+    public function testAResponseWithoutExpirationAsStale()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'public',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        // The first request returns "foo".
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('foo', $response->getContent());
 
         // After an extra second the cache expires, so a new response is served.
         $response = $client->request('GET', 'http://example.com/foo-bar');
@@ -329,7 +361,7 @@ class CachingHttpClientTest extends TestCase
             new MockResponse('foo', [
                 'http_code' => 200,
                 'response_headers' => [
-                    'Cache-Control' => 'public',
+                    'Cache-Control' => 'public, max-age=300',
                 ],
             ]),
             new MockResponse('should not be served'),
@@ -580,7 +612,12 @@ class CachingHttpClientTest extends TestCase
     public function testItCanStreamCachedResponse()
     {
         $mockClient = new MockHttpClient([
-            new MockResponse('foo', ['http_code' => 200]),
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
         ]);
 
         $client = new CachingHttpClient(
@@ -604,7 +641,12 @@ class CachingHttpClientTest extends TestCase
     public function testItCanStreamBoth()
     {
         $mockClient = new MockHttpClient([
-            new MockResponse('foo', ['http_code' => 200]),
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
             new MockResponse('bar', ['http_code' => 200]),
         ]);
 
@@ -873,7 +915,12 @@ class CachingHttpClientTest extends TestCase
     public function testResponseInfluencingHeadersAffectCacheKey()
     {
         $mockClient = new MockHttpClient([
-            new MockResponse('response for en', ['http_code' => 200]),
+            new MockResponse('response for en', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
             new MockResponse('response for fr', ['http_code' => 200]),
         ]);
 
