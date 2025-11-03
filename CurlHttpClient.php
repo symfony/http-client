@@ -378,7 +378,9 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             }
         }
 
-        return true;
+        $statusCode = $pushedResponse->response->getInfo('http_code') ?: 200;
+
+        return $statusCode < 300 || 400 <= $statusCode;
     }
 
     /**
