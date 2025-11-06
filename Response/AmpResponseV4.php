@@ -331,6 +331,10 @@ final class AmpResponseV4 implements ResponseInterface, StreamableInterface
             $request->setTcpConnectTimeout($originRequest->getTcpConnectTimeout());
             $request->setTlsHandshakeTimeout($originRequest->getTlsHandshakeTimeout());
             $request->setTransferTimeout($originRequest->getTransferTimeout());
+            $request->setBodySizeLimit(0);
+            if (method_exists($request, 'setInactivityTimeout')) {
+                $request->setInactivityTimeout(0);
+            }
 
             if (303 === $status || \in_array($status, [301, 302], true) && 'POST' === $response->getRequest()->getMethod()) {
                 // Do like curl and browsers: turn POST to GET on 301, 302 and 303
