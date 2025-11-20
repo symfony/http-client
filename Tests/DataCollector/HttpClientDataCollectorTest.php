@@ -13,6 +13,7 @@ namespace Symfony\Component\HttpClient\Tests\DataCollector;
 
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\DataCollector\HttpClientDataCollector;
+use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\NativeHttpClient;
 use Symfony\Component\HttpClient\TraceableHttpClient;
 use Symfony\Contracts\HttpClient\Test\TestHttpServer;
@@ -436,5 +437,45 @@ class HttpClientDataCollectorTest extends TestCase
         }
 
         return $httpClient;
+    }
+
+    /**
+     * @dataProvider provideClientIsResetWhenExpectedCases
+     */
+    public function testClientIsResetWhenExpected(\Closure $request, bool $wasReset)
+    {
+        $mockHttpClient = new class extends MockHttpClient {
+            public bool $wasReset = false;
+
+            public function reset(): void
+            {
+                parent::reset();
+
+                $this->wasReset = true;
+            }
+        };
+
+        $sut = new HttpClientDataCollector();
+        $sut->registerClient('http_client', $traceableHttpClient = new TraceableHttpClient($mockHttpClient));
+        $request($traceableHttpClient);
+        $sut->lateCollect();
+
+        $this->assertSame($wasReset, $mockHttpClient->wasReset);
+    }
+
+    public static function provideClientIsResetWhenExpectedCases(): iterable
+    {
+        yield [
+            function (TraceableHttpClient $traceableHttpClient) {
+                $response = $traceableHttpClient->request('GET', 'http://localhost/');
+                $response->getContent();
+            },
+            true,
+        ];
+
+        yield [
+            fn () => null,
+            false,
+        ];
     }
 }
