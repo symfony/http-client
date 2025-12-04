@@ -27,7 +27,7 @@ final class HttpClientPass implements CompilerPassInterface
 
         foreach ($container->findTaggedServiceIds('http_client.client') as $id => $tags) {
             $container->register('.debug.'.$id, TraceableHttpClient::class)
-                ->setDecoratedService($id, null, 5)
+                ->setDecoratedService($id, null, 100)
                 ->setArguments([new Reference('.inner'), new Reference('debug.stopwatch', ContainerInterface::IGNORE_ON_INVALID_REFERENCE), new Reference('profiler.is_disabled_state_checker', ContainerInterface::IGNORE_ON_INVALID_REFERENCE)])
                 ->addTag('kernel.reset', ['method' => 'reset']);
             $container->getDefinition('data_collector.http_client')
