@@ -48,8 +48,8 @@ class CurlHttpClientTest extends HttpClientTestCase
     {
         $httpClient = $this->getHttpClient(__FUNCTION__);
 
-        $r = new \ReflectionMethod($httpClient, 'ensureState');
-        $clientState = $r->invoke($httpClient);
+        $r = new \ReflectionProperty($httpClient, 'multi');
+        $clientState = $r->getValue($httpClient);
         $initialShareId = $clientState->share;
         $httpClient->reset();
         self::assertNotSame($initialShareId, $clientState->share);
