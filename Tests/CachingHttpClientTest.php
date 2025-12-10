@@ -172,9 +172,9 @@ class CachingHttpClientTest extends TestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('foo', $response->getContent());
 
-        sleep(5);
+        sleep(4);
 
-        // After 5 seconds, the cached response is still considered valid.
+        // After 4 seconds, the cached response is still considered valid.
         $response = $client->request('GET', 'http://example.com/foo-bar');
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('foo', $response->getContent());
@@ -954,14 +954,14 @@ class CachingHttpClientTest extends TestCase
         self::assertSame('foo', $response->getContent());
 
         // Heuristic: 10% of 3600s = 360s; should be fresh within this time
-        sleep(360); // 5 minutes
+        sleep(359); // 5 minutes
 
         $response = $client->request('GET', 'http://example.com/heuristic');
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('foo', $response->getContent());
 
         // After heuristic expires
-        sleep(1); // Total 361s, past 360s heuristic
+        sleep(2); // Total 361s, past 360s heuristic
 
         $response = $client->request('GET', 'http://example.com/heuristic');
         self::assertSame(200, $response->getStatusCode());

@@ -559,7 +559,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         $now = time();
         $expires = $data['expires_at'];
 
-        if (null !== $expires && $now <= $expires) {
+        if (null !== $expires && $now < $expires) {
             return Freshness::Fresh;
         }
 
