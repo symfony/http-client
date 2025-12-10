@@ -203,11 +203,14 @@ final class HttpClientDataCollector extends DataCollector implements LateDataCol
                 $dataArg[] = '--data-raw '.$this->escapePayload($body);
             } elseif (\is_array($body)) {
                 try {
-                    $body = explode('&', self::normalizeBody($body));
+                    $body = self::normalizeBody($body);
                 } catch (TransportException) {
                     return null;
                 }
-                foreach ($body as $value) {
+                if (!\is_string($body)) {
+                    return null;
+                }
+                foreach (explode('&', $body) as $value) {
                     $dataArg[] = '--data-raw '.$this->escapePayload(urldecode($value));
                 }
             } else {

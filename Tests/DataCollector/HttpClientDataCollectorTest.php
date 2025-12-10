@@ -12,7 +12,9 @@
 namespace Symfony\Component\HttpClient\Tests\DataCollector;
 
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\HttpClient\CurlHttpClient;
 use Symfony\Component\HttpClient\DataCollector\HttpClientDataCollector;
+use Symfony\Component\HttpClient\Exception\TransportException;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\NativeHttpClient;
 use Symfony\Component\HttpClient\TraceableHttpClient;
@@ -420,6 +422,27 @@ class HttpClientDataCollectorTest extends TestCase
                 ],
             ],
         ]));
+        $sut->lateCollect();
+        $collectedData = $sut->getClients();
+        self::assertCount(1, $collectedData['http_client']['traces']);
+        $curlCommand = $collectedData['http_client']['traces'][0]['curlCommand'];
+        self::assertNull($curlCommand);
+    }
+
+    /**
+     * @requires extension curl
+     */
+    public function testGeneratingCurlCommandForArraysWithResourcesAndUnreachableHost()
+    {
+        $httpClient = new TraceableHttpClient(new CurlHttpClient());
+        try {
+            $httpClient->request('POST', 'http://localhast:8057/', [
+                'body' => ['file' => fopen('data://text/plain,', 'r')],
+            ]);
+        } catch (TransportException) {
+        }
+        $sut = new HttpClientDataCollector();
+        $sut->registerClient('http_client', $httpClient);
         $sut->lateCollect();
         $collectedData = $sut->getClients();
         self::assertCount(1, $collectedData['http_client']['traces']);
