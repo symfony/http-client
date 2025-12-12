@@ -41,10 +41,13 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
     ];
 
     private array $defaultOptions = self::OPTIONS_DEFAULTS + [
-        'auth_ntlm' => null, // array|string - an array containing the username as first value, and optionally the
-                             //   password as the second one; or string like username:password - enabling NTLM auth
+        // array|string - an array containing the username as first value, and optionally the
+        //  password as the second one; or string like username:password - enabling NTLM auth
+        'auth_ntlm' => null,
         'extra' => [
-            'curl' => [],    // A list of extra curl options indexed by their corresponding CURLOPT_*
+            'use_persistent_connections' => false,
+            // A list of extra curl options indexed by their corresponding CURLOPT_*
+            'curl' => [],
         ],
     ];
     private static array $emptyDefaults = self::OPTIONS_DEFAULTS + ['auth_ntlm' => null];
@@ -313,7 +316,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
         if (!$pushedResponse) {
             $ch = curl_init();
             $this->logger?->info(\sprintf('Request: "%s %s"', $method, $url));
-            $curlopts += [\CURLOPT_SHARE => $this->multi->share];
+            $curlopts += [\CURLOPT_SHARE => ($options['extra']['use_persistent_connections'] ?? false) ? $this->multi->share : $this->multi->persistentShare];
         }
 
         foreach ($curlopts as $opt => $value) {
