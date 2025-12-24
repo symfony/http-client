@@ -186,6 +186,7 @@ trait HttpClientTrait
         }
 
         $options['max_duration'] = isset($options['max_duration']) ? (float) $options['max_duration'] : 0;
+        $options['max_connect_duration'] = isset($options['max_connect_duration']) ? (float) $options['max_connect_duration'] : 0;
         $options['headers'] = array_merge(...array_values($options['normalized_headers']));
 
         return [$url, $options];

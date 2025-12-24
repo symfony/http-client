@@ -138,6 +138,21 @@ class CurlHttpClientTest extends HttpClientTestCase
         ]);
     }
 
+    public function testOverridingMaxConnectDurationUsingCurlOptions()
+    {
+        $httpClient = $this->getHttpClient(__FUNCTION__);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Cannot set "CURLOPT_CONNECTTIMEOUT_MS" with "extra.curl", use option "max_connect_duration" instead.');
+
+        $httpClient->request('GET', 'http://localhost:8057/', [
+            'extra' => [
+                'curl' => [
+                    \CURLOPT_CONNECTTIMEOUT_MS => 5000,
+                ],
+            ],
+        ]);
+    }
+
     public function testKeepAuthorizationHeaderOnRedirectToSameHostWithConfiguredHostToIpAddressMapping()
     {
         $httpClient = $this->getHttpClient(__FUNCTION__);

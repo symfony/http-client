@@ -13,6 +13,7 @@ namespace Symfony\Component\HttpClient\Internal;
 
 use Amp\ByteStream\ResourceStream;
 use Amp\Cancellation;
+use Amp\DeferredCancellation;
 use Amp\DeferredFuture;
 use Amp\Future;
 use Amp\Http\Client\Connection\ConnectionLimitingPool;
@@ -60,7 +61,7 @@ final class AmpClientState extends ClientState
         $this->clientConfigurator = $clientConfigurator(...);
     }
 
-    public function request(array $options, Request $request, Cancellation $cancellation, array &$info, \Closure $onProgress, &$handle): Response
+    public function request(array $options, Request $request, DeferredCancellation $canceller, array &$info, \Closure $onProgress, &$handle): Response
     {
         if ($options['proxy']) {
             if ($request->hasHeader('proxy-authorization')) {
@@ -87,7 +88,7 @@ final class AmpClientState extends ClientState
             $info['peer_certificate_chain'] = [];
         }
 
-        $request->addEventListener(new AmpListener($info, $options['peer_fingerprint']['pin-sha256'] ?? [], $onProgress, $handle));
+        $request->addEventListener(new AmpListener($info, $options['peer_fingerprint']['pin-sha256'] ?? [], $onProgress, $handle, $options['max_connect_duration'], $canceller));
         $request->setPushHandler(fn ($request, $response) => $this->handlePush($request, $response, $options));
 
         if (0 <= $bodySize = $request->hasHeader('content-length') ? (int) $request->getHeader('content-length') : $request->getBody()->getContentLength() ?? -1) {
@@ -95,7 +96,7 @@ final class AmpClientState extends ClientState
         }
 
         [$client, $connector] = $this->getClient($options);
-        $response = $client->request($request, $cancellation);
+        $response = $client->request($request, $canceller->getCancellation());
         $handle = $connector->handle;
 
         return $response;

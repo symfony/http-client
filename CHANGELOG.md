@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+8.1
+---
+
+ * Add support for the `max_connect_duration` option
+
 8.0
 ---
 

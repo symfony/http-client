@@ -11,6 +11,7 @@
 
 namespace Symfony\Component\HttpClient\Internal;
 
+use Amp\DeferredCancellation;
 use Amp\Http\Client\ApplicationInterceptor;
 use Amp\Http\Client\Connection\Connection;
 use Amp\Http\Client\Connection\Stream;
@@ -19,6 +20,7 @@ use Amp\Http\Client\NetworkInterceptor;
 use Amp\Http\Client\Request;
 use Amp\Http\Client\Response;
 use Amp\Socket\InternetAddress;
+use Revolt\EventLoop;
 use Symfony\Component\HttpClient\Exception\TransportException;
 
 /**
@@ -29,6 +31,7 @@ use Symfony\Component\HttpClient\Exception\TransportException;
 class AmpListener implements EventListener
 {
     private array $info;
+    private ?string $connectTimerId = null;
 
     /**
      * @param resource|null $handle
@@ -38,6 +41,8 @@ class AmpListener implements EventListener
         private array $pinSha256,
         private \Closure $onProgress,
         private &$handle,
+        private float $maxConnectDuration,
+        private DeferredCancellation $canceller,
     ) {
         $info += [
             'connect_time' => 0.0,
@@ -55,11 +60,23 @@ class AmpListener implements EventListener
     public function requestStart(Request $request): void
     {
         $this->info['start_time'] ??= microtime(true);
+
+        if (0 < $this->maxConnectDuration) {
+            $this->connectTimerId = EventLoop::delay($this->maxConnectDuration, function (): void {
+                $this->canceller->cancel(new TransportException(\sprintf('Max connect duration was reached for "%s".', $this->info['url'])));
+            });
+        }
+
         ($this->onProgress)();
     }
 
     public function connectionAcquired(Request $request, Connection $connection, int $streamCount): void
     {
+        if (null !== $this->connectTimerId) {
+            EventLoop::cancel($this->connectTimerId);
+            $this->connectTimerId = null;
+        }
+
         $this->info['namelookup_time'] = microtime(true) - $this->info['start_time']; // see https://github.com/amphp/socket/issues/114
         $this->info['connect_time'] = microtime(true) - $this->info['start_time'];
         ($this->onProgress)();
@@ -137,6 +154,11 @@ class AmpListener implements EventListener
 
     public function requestFailed(Request $request, \Throwable $exception): void
     {
+        if (null !== $this->connectTimerId) {
+            EventLoop::cancel($this->connectTimerId);
+            $this->connectTimerId = null;
+        }
+
         $this->handle = null;
         ($this->onProgress)();
     }

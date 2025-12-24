@@ -24,7 +24,7 @@
     "require": {
         "php": ">=8.4",
         "psr/log": "^1|^2|^3",
-        "symfony/http-client-contracts": "~3.4.4|^3.5.2",
+        "symfony/http-client-contracts": "^3.7",
         "symfony/service-contracts": "^2.5|^3"
     },
     "require-dev": {
