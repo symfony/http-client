@@ -96,12 +96,15 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     private bool $isInnerRequest = false;
 
     /**
-     * @param bool     $sharedCache Indicates whether this cache is shared or private. When true, responses
-     *                              may be skipped from caching in presence of certain headers
-     *                              (e.g. Authorization) unless explicitly marked as public.
-     * @param int|null $maxTtl      The maximum time-to-live (in seconds) for cached responses.
-     *                              If a server-provided TTL exceeds this value, it will be capped
-     *                              to this maximum.
+     * @param bool              $sharedCache Indicates whether this cache is shared or private. When true, responses
+     *                                       may be skipped from caching in presence of certain headers
+     *                                       (e.g. Authorization) unless explicitly marked as public.
+     * @param positive-int|null $maxTtl      The maximum time-to-live (in seconds) for cached responses.
+     *                                       If a server-provided TTL exceeds this value, it will be capped
+     *                                       to this maximum.
+     * @param positive-int      $ttlBuffer   Safety buffer (in seconds) added to the time-to-live of every cached
+     *                                       response that has a positive lifetime. Compensates for async
+     *                                       streaming delay.
      */
     public function __construct(
         private HttpClientInterface $client,
@@ -109,6 +112,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         array $defaultOptions = [],
         private readonly bool $sharedCache = true,
         private readonly ?int $maxTtl = null,
+        private readonly int $ttlBuffer = 300,
     ) {
         if ($defaultOptions) {
             [, $this->defaultOptions] = self::prepareRequest(null, null, $defaultOptions, $this->defaultOptions);
@@ -177,11 +181,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             }
         }
 
-        // consistent expiration time for all items
-        $expiresAt = null === $this->maxTtl ? null : \DateTimeImmutable::createFromFormat('U', time() + $this->maxTtl);
-
         $passthru = function (ChunkInterface $chunk, AsyncContext $context) use (
-            $expiresAt,
             $fullUrlTag,
             $requestHash,
             $varyKey,
@@ -196,6 +196,8 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             static $attemptTag = null;
             static $firstChunkKey = null;
             static $chunkKey = null;
+            static $maxAge = null;
+            static $expiresAt = null;
 
             if (null !== $chunk->getError() || $chunk->isTimeout()) {
                 null !== $attemptTag && $this->cache->invalidateTags([$attemptTag]);
@@ -227,20 +229,23 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
             if ($chunk->isFirst()) {
                 $statusCode = $context->getStatusCode();
-                $cacheControl = self::parseCacheControlHeader($headers['cache-control'] ?? []);
 
                 $attemptTag = self::generateChunkKey();
 
                 if (304 === $statusCode && null !== $freshness) {
+                    $headers = array_merge($cachedData['headers'], array_diff_key($headers, self::EXCLUDED_HEADERS));
+
+                    $cacheControl = self::parseCacheControlHeader($headers['cache-control'] ?? []);
                     $maxAge = $this->determineMaxAge($headers, $cacheControl);
+                    $expiresAt = \DateTimeImmutable::createFromFormat('U', time() + $this->computeTotalUsableTtl($maxAge, $cacheControl));
 
-                    $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $expiresAt, $fullUrlTag, $metadataKey): array {
-                        $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
-
+                    $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $fullUrlTag, $metadataKey, $expiresAt): array {
                         $cachedData['expires_at'] = self::calculateExpiresAt($maxAge);
                         $cachedData['stored_at'] = time();
-                        $cachedData['initial_age'] = (int) ($headers['age'][0] ?? 0);
-                        $cachedData['headers'] = array_merge($cachedData['headers'], array_diff_key($headers, self::EXCLUDED_HEADERS));
+                        $cachedData['initial_age'] = self::getCurrentAge($headers);
+                        $cachedData['headers'] = $headers;
+
+                        $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
 
                         return $cachedData;
                     }, \INF);
@@ -267,6 +272,8 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                     }
                 }
 
+                $cacheControl = self::parseCacheControlHeader($headers['cache-control'] ?? []);
+
                 if (!$this->isServerResponseCacheable($statusCode, $options['normalized_headers'], $headers, $cacheControl)) {
                     $context->passthru();
 
@@ -274,6 +281,20 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
                     return;
                 }
+
+                $maxAge = $this->determineMaxAge($headers, $cacheControl);
+                $usableTtl = $this->computeTotalUsableTtl($maxAge, $cacheControl);
+
+                if (0 === $usableTtl) {
+                    $context->passthru();
+
+                    yield $chunk;
+
+                    return;
+                }
+
+                // consistent expiration time for all items
+                $expiresAt = \DateTimeImmutable::createFromFormat('U', time() + $usableTtl);
 
                 // recomputing vary fields in case it changed or for first request
                 $newVaryFields = [];
@@ -333,14 +354,13 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                     ];
                 }, \INF);
 
-                $maxAge = $this->determineMaxAge($headers, self::parseCacheControlHeader($headers['cache-control'] ?? []));
                 $this->cache->get($metadataKey, static function (ItemInterface $item) use ($context, $headers, $maxAge, $expiresAt, $fullUrlTag, $metadataKey, $attemptTag, $firstChunkKey): array {
                     $item->tag([$fullUrlTag, $metadataKey, $attemptTag])->expiresAt($expiresAt);
 
                     return [
                         'status_code' => $context->getStatusCode(),
                         'headers' => array_diff_key($headers, self::EXCLUDED_HEADERS),
-                        'initial_age' => (int) ($headers['age'][0] ?? 0),
+                        'initial_age' => self::getCurrentAge($headers),
                         'stored_at' => time(),
                         'expires_at' => self::calculateExpiresAt($maxAge),
                         'next_chunk' => $firstChunkKey,
@@ -595,6 +615,24 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         }
 
         return null;
+    }
+
+    /**
+     * Computes the total usable lifetime in seconds, including stale extensions.
+     *
+     * @param array<string, string|true> $cacheControl An array of parsed Cache-Control directives
+     *
+     * @return int Seconds until the item should be removed from cache
+     */
+    private function computeTotalUsableTtl(?int $maxAge, array $cacheControl): int
+    {
+        $ttl = ($maxAge ?? 0) + max($cacheControl['stale-while-revalidate'] ?? 0, $cacheControl['stale-if-error'] ?? 0);
+
+        if ($ttl > 0) {
+            $ttl += $this->ttlBuffer;
+        }
+
+        return null === $this->maxTtl ? $ttl : min($ttl, $this->maxTtl);
     }
 
     /**
