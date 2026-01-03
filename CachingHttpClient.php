@@ -238,7 +238,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                         }, \INF);
 
                         $context->passthru();
-                        $context->replaceResponse($this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey));
+                        $context->replaceResponse($this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey, $expiresAt));
 
                         return;
                     }
@@ -666,17 +666,33 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
      *
      * @param array{next_chunk: string, status_code: int, initial_age: int, headers: array<string, string|string[]>, stored_at: int} $cachedData
      */
-    private function createResponseFromCache(array $cachedData, string $method, string $url, array $options, string $metadataKey): MockResponse
+    private function createResponseFromCache(array $cachedData, string $method, string $url, array $options, string $metadataKey, \DateTimeImmutable|false|null $newExpiresAt = false): MockResponse
     {
         $cache = $this->cache;
+
+        $beta = 0;
         $callback = static function (ItemInterface $item) use ($cache, $metadataKey): never {
             $cache->invalidateTags([$metadataKey]);
 
             throw new ChunkCacheItemNotFoundException(\sprintf('Missing cache item for chunk with key "%s". This indicates an internal cache inconsistency.', $item->getKey()));
         };
-        $body = static function () use ($cache, $cachedData, $callback): \Generator {
+
+        if (false !== $newExpiresAt) {
+            $beta = \INF;
+            $callback = static function (ItemInterface $item) use ($callback, $newExpiresAt): array {
+                if (!$item->isHit()) {
+                    $callback($item);
+                }
+
+                $item->expiresAt($newExpiresAt);
+
+                return $item->get();
+            };
+        }
+
+        $body = static function () use ($cache, $cachedData, $callback, $beta): \Generator {
             while (null !== $cachedData['next_chunk']) {
-                $cachedData = $cache->get($cachedData['next_chunk'], $callback, 0);
+                $cachedData = $cache->get($cachedData['next_chunk'], $callback, $beta);
 
                 if ('' !== $cachedData['content']) {
                     yield $cachedData['content'];
