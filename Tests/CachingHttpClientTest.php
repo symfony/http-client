@@ -41,6 +41,37 @@ class CachingHttpClientTest extends TestCase
         self::assertSame($response->getRequestOptions()['normalized_headers']['test-name-header'][0], 'Test-Name-Header: test12345');
     }
 
+    public function testOverridesDefaultsAndKeepsMultipleHeaderValues()
+    {
+        $capturedHeaders = null;
+
+        $mockClient = new MockHttpClient(function (string $method, string $url, array $options) use (&$capturedHeaders) {
+            $capturedHeaders = $options['normalized_headers'];
+
+            return new MockResponse();
+        });
+
+        $cacheDir = sys_get_temp_dir().'/sf_http_cache_'.uniqid('', true);
+        $store = new Store($cacheDir);
+        $client = new CachingHttpClient($mockClient, $store);
+
+        try {
+            $client->request('GET', 'https://example.com/foo', [
+                'headers' => [
+                    'Accept-Language' => ['de', 'fr'],
+                ],
+            ]);
+        } finally {
+            $this->removeDir($cacheDir);
+        }
+
+        self::assertNotNull($capturedHeaders);
+        self::assertSame([
+            'accept-language: de',
+            'accept-language: fr',
+        ], $capturedHeaders['accept-language']);
+    }
+
     public function testDoesNotEvaluateResponseBody()
     {
         $body = file_get_contents(__DIR__.'/Fixtures/assertion_failure.php');
@@ -106,5 +137,27 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://test');
 
         return $response;
+    }
+
+    private function removeDir(string $directory): void
+    {
+        if (!is_dir($directory)) {
+            return;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $fileInfo) {
+            if ($fileInfo->isDir()) {
+                rmdir($fileInfo->getPathname());
+            } else {
+                unlink($fileInfo->getPathname());
+            }
+        }
+
+        rmdir($directory);
     }
 }
