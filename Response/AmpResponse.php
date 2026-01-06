@@ -87,6 +87,7 @@ final class AmpResponse implements ResponseInterface, StreamableInterface
         $info['download_content_length'] = -1.0;
         $info['user_data'] = $options['user_data'];
         $info['max_duration'] = $options['max_duration'];
+        $info['max_connect_duration'] = $options['max_connect_duration'];
         $info['debug'] = '';
 
         $onProgress = $options['on_progress'] ?? static function () {};
@@ -278,7 +279,7 @@ final class AmpResponse implements ResponseInterface, StreamableInterface
         }
 
         $originRequest->setBody(new AmpBody($options['body'], $info, $onProgress));
-        $response = $multi->request($options, $originRequest, $canceller->getCancellation(), $info, $onProgress, $handle);
+        $response = $multi->request($options, $originRequest, $canceller, $info, $onProgress, $handle);
         $previousUrl = null;
 
         while (true) {
@@ -361,7 +362,7 @@ final class AmpResponse implements ResponseInterface, StreamableInterface
                 delay($pause, true, $canceller->getCancellation());
             }
 
-            $response = $multi->request($options, $request, $canceller->getCancellation(), $info, $onProgress, $handle);
+            $response = $multi->request($options, $request, $canceller, $info, $onProgress, $handle);
             $info['redirect_time'] = microtime(true) - $info['start_time'];
         }
     }

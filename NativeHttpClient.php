@@ -222,7 +222,7 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
                 'curl_verify_ssl_peer' => $options['verify_peer'],
                 'curl_verify_ssl_host' => $options['verify_host'],
                 'auto_decode' => false, // Disable dechunk filter, it's incompatible with stream_select()
-                'timeout' => $options['timeout'],
+                'timeout' => 0 < $options['max_connect_duration'] ? min($options['timeout'], $options['max_connect_duration']) : $options['timeout'],
                 'follow_location' => false, // We follow redirects ourselves - the native logic is too limited
             ],
             'ssl' => array_filter([

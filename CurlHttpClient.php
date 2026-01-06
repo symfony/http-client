@@ -285,6 +285,10 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             $curlopts[\CURLOPT_TIMEOUT_MS] = 1000 * $options['max_duration'];
         }
 
+        if (0 < $options['max_connect_duration']) {
+            $curlopts[\CURLOPT_CONNECTTIMEOUT_MS] = ceil(1000 * $options['max_connect_duration']);
+        }
+
         if (!empty($options['extra']['curl']) && \is_array($options['extra']['curl'])) {
             $this->validateExtraCurlOptions($options['extra']['curl']);
             $curlopts += $options['extra']['curl'];
@@ -468,6 +472,8 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             \CURLOPT_INTERFACE => 'bindto',
             \CURLOPT_TIMEOUT_MS => 'max_duration',
             \CURLOPT_TIMEOUT => 'max_duration',
+            \CURLOPT_CONNECTTIMEOUT_MS => 'max_connect_duration',
+            \CURLOPT_CONNECTTIMEOUT => 'max_connect_duration',
             \CURLOPT_MAXREDIRS => 'max_redirects',
             \CURLOPT_POSTREDIR => 'max_redirects',
             \CURLOPT_PROXY => 'proxy',
@@ -506,8 +512,6 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             \CURLOPT_URL,
             \CURLOPT_FOLLOWLOCATION,
             \CURLOPT_HEADER,
-            \CURLOPT_CONNECTTIMEOUT,
-            \CURLOPT_CONNECTTIMEOUT_MS,
             \CURLOPT_HTTP_VERSION,
             \CURLOPT_PORT,
             \CURLOPT_DNS_USE_GLOBAL_CACHE,
