@@ -1046,4 +1046,43 @@ class CachingHttpClientTest extends TestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('initial get', $response->getContent());
     }
+
+    public function testMultipleValuesForResponseInfluencingHeadersAffectCacheKey()
+    {
+        // Test that multiple values for a response-influencing header (like Accept-Language)
+        // result in different cache keys and don't incorrectly share cached responses.
+        $mockClient = new MockHttpClient([
+            new MockResponse('response for de', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('response for de-fr', ['http_code' => 200]),
+            new MockResponse('response for fr', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        // First request with Accept-Language: de
+        $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => 'de']]);
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('response for de', $response->getContent());
+
+        // Same request with Accept-Language: de should return cached response
+        $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => 'de']]);
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('response for de', $response->getContent());
+
+        // Request with multiple Accept-Language values should fetch new response
+        // because the cache key includes all header values
+        $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => ['de', 'fr']]]);
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('response for de-fr', $response->getContent());
+
+        // Request with only Accept-Language: fr should fetch yet another response
+        $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => 'fr']]);
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('response for fr', $response->getContent());
+    }
 }
