@@ -708,4 +708,14 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
 
         $this->addToAssertionCount(1);
     }
+
+    public function testMaxConnectDurationInfo()
+    {
+        $this->markTestSkipped('The "max_connect_duration" option is not supported in this version of the HttpClient component.');
+    }
+
+    public function testMaxConnectDuration()
+    {
+        $this->markTestSkipped('The "max_connect_duration" option is not supported in this version of the HttpClient component.');
+    }
 }
