@@ -438,7 +438,7 @@ class MockHttpClientTest extends HttpClientTestCase
                 break;
 
             case 'testInformationalResponseStream':
-                $client = $this->createMock(HttpClientInterface::class);
+                $client = $this->createStub(HttpClientInterface::class);
                 $response = new MockResponse('Here the body', ['response_headers' => [
                     'HTTP/1.1 103 ',
                     'Link: </style.css>; rel=preload; as=style',
@@ -448,23 +448,23 @@ class MockHttpClientTest extends HttpClientTestCase
                 ]]);
                 $client->method('request')->willReturn($response);
                 $client->method('stream')->willReturn(new ResponseStream((function () use ($response) {
-                    $chunk = $this->createMock(ChunkInterface::class);
+                    $chunk = $this->createStub(ChunkInterface::class);
                     $chunk->method('getInformationalStatus')
                         ->willReturn([103, ['link' => ['</style.css>; rel=preload; as=style', '</script.js>; rel=preload; as=script']]]);
 
                     yield $response => $chunk;
 
-                    $chunk = $this->createMock(ChunkInterface::class);
+                    $chunk = $this->createStub(ChunkInterface::class);
                     $chunk->method('isFirst')->willReturn(true);
 
                     yield $response => $chunk;
 
-                    $chunk = $this->createMock(ChunkInterface::class);
+                    $chunk = $this->createStub(ChunkInterface::class);
                     $chunk->method('getContent')->willReturn('Here the body');
 
                     yield $response => $chunk;
 
-                    $chunk = $this->createMock(ChunkInterface::class);
+                    $chunk = $this->createStub(ChunkInterface::class);
                     $chunk->method('isLast')->willReturn(true);
 
                     yield $response => $chunk;

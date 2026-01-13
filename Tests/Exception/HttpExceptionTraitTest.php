@@ -41,7 +41,7 @@ ERROR;
      */
     public function testParseError(string $mimeType, string $json, string $expectedMessage)
     {
-        $response = $this->createMock(ResponseInterface::class);
+        $response = $this->createStub(ResponseInterface::class);
         $response
             ->method('getInfo')
             ->willReturnMap([
