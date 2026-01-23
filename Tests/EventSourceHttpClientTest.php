@@ -125,7 +125,7 @@ class EventSourceHttpClientTest extends TestCase
             return true;
         };
 
-        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient = $this->createStub(HttpClientInterface::class);
 
         $httpClient->method('request')->with('POST', 'http://localhost:8080/events', $this->callback($hasCorrectHeaders))->willReturn($response);
 
@@ -152,7 +152,7 @@ class EventSourceHttpClientTest extends TestCase
             return true;
         };
 
-        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient = $this->createStub(HttpClientInterface::class);
         $httpClient->method('request')->with('GET', 'http://localhost:8080/events', $this->callback($hasCorrectHeaders))->willReturn($response);
 
         $httpClient->method('stream')->willReturn($responseStream);
