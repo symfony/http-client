@@ -134,7 +134,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             $curlopts[\CURLOPT_HTTP_VERSION] = \CURL_HTTP_VERSION_1_1;
         } elseif (\defined('CURL_VERSION_HTTP2') && (\CURL_VERSION_HTTP2 & CurlClientState::$curlVersion['features']) && ('https:' === $scheme || 2.0 === (float) $options['http_version'])) {
             $curlopts[\CURLOPT_HTTP_VERSION] = \CURL_HTTP_VERSION_2_0;
-        } elseif (\defined('CURL_VERSION_HTTP3') && (\CURL_VERSION_HTTP3 & CurlClientState::$curlVersion['features']) && 3.0 === (float) $options['http_version']) {
+        } elseif (\defined('CURL_VERSION_HTTP3') && (\CURL_VERSION_HTTP3 & CurlClientState::$curlVersion['features']) && 3.0 === (float) $options['http_version'] && !self::willUseProxy($proxy, $curlopts[\CURLOPT_NOPROXY], $host)) {
             $curlopts[\CURLOPT_HTTP_VERSION] = \CURL_HTTP_VERSION_3;
         }
 
@@ -435,7 +435,12 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
                 curl_setopt($ch, \CURLOPT_HTTPHEADER, $redirectHeaders['with_auth']);
             }
 
-            curl_setopt($ch, \CURLOPT_PROXY, self::getProxyUrl($options['proxy'], $url));
+            $proxy = self::getProxyUrl($options['proxy'], $url);
+            curl_setopt($ch, \CURLOPT_PROXY, $proxy);
+
+            if (\defined('CURL_HTTP_VERSION_3') && \CURL_HTTP_VERSION_3 === curl_getinfo($ch, \CURLINFO_HTTP_VERSION) && self::willUseProxy($proxy, $options['no_proxy'] ?? $_SERVER['no_proxy'] ?? $_SERVER['NO_PROXY'] ?? '', parse_url($url['authority'], \PHP_URL_HOST))) {
+                curl_setopt($ch, \CURLOPT_HTTP_VERSION, \defined('CURL_HTTP_VERSION_2_0') ? \CURL_HTTP_VERSION_2_0 : \CURL_HTTP_VERSION_1_1);
+            }
 
             return implode('', $url);
         };
@@ -540,5 +545,26 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
                 throw new InvalidArgumentException(\sprintf('Cannot set "%s" with "extra.curl".', $constName));
             }
         }
+    }
+
+    private static function willUseProxy(?string $proxy, string $noProxy, string $host): bool
+    {
+        if (null === $proxy) {
+            return false;
+        }
+
+        if ('' === $noProxy) {
+            return true;
+        }
+
+        foreach (preg_split('/[\s,]+/', $noProxy) as $rule) {
+            $dotRule = '.'.ltrim($rule, '.');
+
+            if ('*' === $rule || $host === $rule || str_ends_with($host, $dotRule)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
