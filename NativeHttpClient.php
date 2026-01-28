@@ -204,6 +204,9 @@ final class NativeHttpClient implements HttpClientInterface, LoggerAwareInterfac
         if (0 < $options['max_duration']) {
             $options['timeout'] = min($options['max_duration'], $options['timeout']);
         }
+        if (\PHP_INT_SIZE === 4 && 2147 < $options['timeout']) {
+            $options['timeout'] = 2147; // fopen() on x86 doesn't support longer timeouts
+        }
 
         switch ($cryptoMethod = $options['crypto_method']) {
             case \STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT:
