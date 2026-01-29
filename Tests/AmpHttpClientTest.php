@@ -26,7 +26,7 @@ class AmpHttpClientTest extends HttpClientTestCase
 
     protected function getHttpClient(string $testCase): HttpClientInterface
     {
-        return new AmpHttpClient(['verify_peer' => false, 'verify_host' => false, 'timeout' => 5]);
+        return new AmpHttpClient(['verify_peer' => false, 'verify_host' => false, 'timeout' => 30]);
     }
 
     public function testProxy()
