@@ -127,7 +127,14 @@ TXT
 
         $httpClient = $this->createStub(HttpClientInterface::class);
 
-        $httpClient->method('request')->with('POST', 'http://localhost:8080/events', $this->callback($hasCorrectHeaders))->willReturn($response);
+        $httpClient->method('request')
+            ->willReturnCallback(function (string $method, string $url, array $options = []) use ($hasCorrectHeaders, $response) {
+                $this->assertSame('POST', $method);
+                $this->assertSame('http://localhost:8080/events', $url);
+                $this->assertTrue($hasCorrectHeaders($options));
+
+                return $response;
+            });
 
         $httpClient->method('stream')->willReturn($responseStream);
 
@@ -155,7 +162,14 @@ TXT
         };
 
         $httpClient = $this->createStub(HttpClientInterface::class);
-        $httpClient->method('request')->with('GET', 'http://localhost:8080/events', $this->callback($hasCorrectHeaders))->willReturn($response);
+        $httpClient->method('request')
+            ->willReturnCallback(function (string $method, string $url, array $options = []) use ($hasCorrectHeaders, $response) {
+                $this->assertSame('GET', $method);
+                $this->assertSame('http://localhost:8080/events', $url);
+                $this->assertTrue($hasCorrectHeaders($options));
+
+                return $response;
+            });
 
         $httpClient->method('stream')->willReturn($responseStream);
 
