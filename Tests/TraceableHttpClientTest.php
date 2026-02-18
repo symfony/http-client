@@ -31,7 +31,7 @@ class TraceableHttpClientTest extends TestCase
 
     public function testItTracesRequest()
     {
-        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient = $this->createStub(HttpClientInterface::class);
         $httpClient
             ->method('request')
             ->willReturnCallback(function (string $method, string $url, array $options = []) {

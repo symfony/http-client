@@ -125,7 +125,7 @@ class EventSourceHttpClientTest extends TestCase
             return true;
         };
 
-        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient = $this->createStub(HttpClientInterface::class);
 
         $httpClient->method('request')
             ->willReturnCallback(function (string $method, string $url, array $options = []) use ($hasCorrectHeaders, $response) {
