@@ -1028,7 +1028,7 @@ class CachingHttpClientTest extends TestCase
     /**
      * @param iterable<MockResponse> $responses
      */
-    private function buildClient(iterable $responses, array $defaultOptions = [], bool $sharedCache = true, ?int $maxTtl = null): CachingHttpClient
+    private function buildClient(iterable $responses, array $defaultOptions = [], bool $sharedCache = true, int $maxTtl = 86400): CachingHttpClient
     {
         return new CachingHttpClient(
             new MockHttpClient($responses),
@@ -1036,7 +1036,6 @@ class CachingHttpClientTest extends TestCase
             $defaultOptions,
             $sharedCache,
             $maxTtl,
-            300,
         );
     }
 }
