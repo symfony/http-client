@@ -1149,7 +1149,6 @@ class CachingHttpClientTest extends TestCase
             $this->markTestSkipped('Legacy symfony/http-client-contracts in use');
         }
 
-        // no-cache means the cache must revalidate on every request;
         // the server returns 304 when If-None-Match matches
         $response = $client->request('GET', 'http://localhost:8057/304/etag');
         $this->assertSame(200, $response->getStatusCode());

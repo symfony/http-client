@@ -160,7 +160,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         $fullUrlTag = self::hash($fullUrl);
 
         if ('' !== $options['body'] || ($options['extra']['no_cache'] ?? false) || isset($options['normalized_headers']['range']) || !\in_array($method, self::CACHEABLE_METHODS, true)) {
-            return new AsyncResponse($this->client, $method, $url, $options, function (ChunkInterface $chunk, AsyncContext $context) use ($method, $fullUrlTag): \Generator {
+            $passthru = function (ChunkInterface $chunk, AsyncContext $context) use ($method, $fullUrlTag): \Generator {
                 if (null !== $chunk->getError() || $chunk->isTimeout() || !$chunk->isFirst()) {
                     yield $chunk;
 
@@ -175,7 +175,15 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                 $context->passthru();
 
                 yield $chunk;
-            });
+            };
+
+            $this->isInnerRequest = true;
+
+            try {
+                return new AsyncResponse($this, $method, $url, $options, $passthru);
+            } finally {
+                $this->isInnerRequest = false;
+            }
         }
 
         $requestHash = self::hash($method.$fullUrl.serialize(array_intersect_key($options['normalized_headers'], self::RESPONSE_INFLUENCING_HEADERS)));
