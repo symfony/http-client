@@ -20,8 +20,11 @@ use Symfony\Component\Cache\Adapter\TagAwareAdapter;
 use Symfony\Component\Cache\Adapter\TagAwareAdapterInterface;
 use Symfony\Component\HttpClient\CachingHttpClient;
 use Symfony\Component\HttpClient\MockHttpClient;
+use Symfony\Component\HttpClient\NativeHttpClient;
 use Symfony\Component\HttpClient\Response\AsyncResponse;
 use Symfony\Component\HttpClient\Response\MockResponse;
+use Symfony\Component\HttpClient\TraceableHttpClient;
+use Symfony\Contracts\HttpClient\Test\TestHttpServer;
 
 #[CoversClass(CachingHttpClient::class)]
 #[Group('time-sensitive')]
@@ -53,7 +56,7 @@ class CachingHttpClientTest extends TestCase
         $options = ['body' => 'non-empty'];
         $client->request('GET', 'http://example.com/foo-bar', $options);
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame('non-cached response', $response->getContent(), 'Request with body should bypass cache.');
+        $this->assertSame('non-cached response', $response->getContent(), 'Request with body should bypass cache.');
     }
 
     public function testBypassCacheWhenRangeHeaderPresent()
@@ -70,7 +73,7 @@ class CachingHttpClientTest extends TestCase
         ];
         $client->request('GET', 'http://example.com/foo-bar', $options);
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame('second response', $response->getContent(), 'Presence of range header must bypass caching.');
+        $this->assertSame('second response', $response->getContent(), 'Presence of range header must bypass caching.');
     }
 
     public function testBypassCacheForNonCacheableMethod()
@@ -84,7 +87,7 @@ class CachingHttpClientTest extends TestCase
 
         $client->request('POST', 'http://example.com/foo-bar');
         $response = $client->request('POST', 'http://example.com/foo-bar');
-        self::assertSame('second response', $response->getContent(), 'Non-cacheable method must bypass caching.');
+        $this->assertSame('second response', $response->getContent(), 'Non-cacheable method must bypass caching.');
     }
 
     public function testItServesResponseFromCache()
@@ -105,15 +108,15 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(2);
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
-        self::assertSame('2', $response->getHeaders()['age'][0]);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+        $this->assertSame('2', $response->getHeaders()['age'][0]);
     }
 
     public function testItSupportsVaryHeader()
@@ -136,18 +139,18 @@ class CachingHttpClientTest extends TestCase
 
         // Request with one set of headers.
         $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Foo' => 'foo', 'Bar' => 'bar']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         // Same headers: should return cached "foo".
         $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Foo' => 'foo', 'Bar' => 'bar']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         // Different header values: returns a new response.
         $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Foo' => 'bar', 'Bar' => 'foo']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testItDoesntServeAStaleResponse()
@@ -169,22 +172,22 @@ class CachingHttpClientTest extends TestCase
 
         // The first request returns "foo".
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(4);
 
         // After 4 seconds, the cached response is still considered valid.
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(1);
 
         // After an extra second the cache expires, so a new response is served.
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testAResponseWithoutExpirationAsStale()
@@ -206,13 +209,13 @@ class CachingHttpClientTest extends TestCase
 
         // The first request returns "foo".
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         // After an extra second the cache expires, so a new response is served.
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testItRevalidatesAResponseWithNoCacheDirective()
@@ -235,13 +238,13 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         // The next request revalidates the response and should fetch "bar".
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testItServesAStaleResponseIfError()
@@ -263,14 +266,14 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(404, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent(false));
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent(false));
 
         sleep(5);
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(404, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent(false));
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent(false));
     }
 
     public function testPrivateCacheWithSharedCacheFalse()
@@ -293,12 +296,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/test-private');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/test-private');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testItDoesntStoreAResponseWithNoStoreDirective()
@@ -319,12 +322,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testASharedCacheDoesntStoreAResponseFromRequestWithAuthorization()
@@ -347,12 +350,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testASharedCacheStoresAResponseWithPublicDirectiveFromRequestWithAuthorization()
@@ -379,12 +382,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testASharedCacheStoresAResponseWithSMaxAgeDirectiveFromRequestWithAuthorization()
@@ -411,12 +414,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testASharedCacheDoesntStoreAResponseWithPrivateDirective()
@@ -438,12 +441,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testAPrivateCacheStoresAResponseWithPrivateDirective()
@@ -465,12 +468,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testASharedCacheDoesntStoreAResponseWithAuthenticationHeader()
@@ -493,12 +496,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testAPrivateCacheStoresAResponseWithAuthenticationHeader()
@@ -521,12 +524,12 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testCacheMissAfterInvalidation()
@@ -548,14 +551,14 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $client->request('DELETE', 'http://example.com/foo-bar');
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testChunkErrorServesStaleResponse()
@@ -576,14 +579,14 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(2);
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testChunkErrorMustRevalidate()
@@ -604,13 +607,13 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(2);
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(504, $response->getStatusCode());
+        $this->assertSame(504, $response->getStatusCode());
     }
 
     public function testExceedingMaxAgeIsCappedByTtl()
@@ -632,14 +635,14 @@ class CachingHttpClientTest extends TestCase
         );
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(11);
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testItCanStreamAsyncResponse()
@@ -655,14 +658,14 @@ class CachingHttpClientTest extends TestCase
 
         $response = $client->request('GET', 'http://example.com/foo-bar');
 
-        self::assertInstanceOf(AsyncResponse::class, $response);
+        $this->assertInstanceOf(AsyncResponse::class, $response);
 
         $collected = '';
         foreach ($client->stream($response) as $chunk) {
             $collected .= $chunk->getContent();
         }
 
-        self::assertSame('foo', $collected);
+        $this->assertSame('foo', $collected);
     }
 
     public function testItCanStreamCachedResponse()
@@ -684,14 +687,14 @@ class CachingHttpClientTest extends TestCase
         $client->request('GET', 'http://example.com/foo-bar')->getContent(); // warm the cache
         $response = $client->request('GET', 'http://example.com/foo-bar');
 
-        self::assertInstanceOf(MockResponse::class, $response);
+        $this->assertInstanceOf(MockResponse::class, $response);
 
         $collected = '';
         foreach ($client->stream($response) as $chunk) {
             $collected .= $chunk->getContent();
         }
 
-        self::assertSame('foo', $collected);
+        $this->assertSame('foo', $collected);
     }
 
     public function testItCanStreamBoth()
@@ -715,15 +718,15 @@ class CachingHttpClientTest extends TestCase
         $cachedResponse = $client->request('GET', 'http://example.com/foo');
         $asyncResponse = $client->request('GET', 'http://example.com/bar');
 
-        self::assertInstanceOf(MockResponse::class, $cachedResponse);
-        self::assertInstanceOf(AsyncResponse::class, $asyncResponse);
+        $this->assertInstanceOf(MockResponse::class, $cachedResponse);
+        $this->assertInstanceOf(AsyncResponse::class, $asyncResponse);
 
         $collected = '';
         foreach ($client->stream([$asyncResponse, $cachedResponse]) as $chunk) {
             $collected .= $chunk->getContent();
         }
 
-        self::assertSame('foobar', $collected);
+        $this->assertSame('foobar', $collected);
     }
 
     public function testMultipleChunksResponse()
@@ -739,14 +742,14 @@ class CachingHttpClientTest extends TestCase
         foreach ($client->stream($response) as $chunk) {
             $content .= $chunk->getContent();
         }
-        self::assertSame('chunk1chunk2chunk3', $content);
+        $this->assertSame('chunk1chunk2chunk3', $content);
 
         $response = $client->request('GET', 'http://example.com/multi-chunk');
         $content = '';
         foreach ($client->stream($response) as $chunk) {
             $content .= $chunk->getContent();
         }
-        self::assertSame('chunk1chunk2chunk3', $content);
+        $this->assertSame('chunk1chunk2chunk3', $content);
     }
 
     public function testConditionalCacheableStatusCodeWithoutExpiration()
@@ -759,12 +762,12 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/redirect');
-        self::assertSame(302, $response->getStatusCode());
-        self::assertSame('redirected', $response->getContent(false));
+        $this->assertSame(302, $response->getStatusCode());
+        $this->assertSame('redirected', $response->getContent(false));
 
         $response = $client->request('GET', 'http://example.com/redirect');
-        self::assertSame(302, $response->getStatusCode());
-        self::assertSame('new redirect', $response->getContent(false));
+        $this->assertSame(302, $response->getStatusCode());
+        $this->assertSame('new redirect', $response->getContent(false));
     }
 
     public function testConditionalCacheableStatusCodeWithExpiration()
@@ -780,12 +783,12 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/redirect');
-        self::assertSame(302, $response->getStatusCode());
-        self::assertSame('redirected', $response->getContent(false));
+        $this->assertSame(302, $response->getStatusCode());
+        $this->assertSame('redirected', $response->getContent(false));
 
         $response = $client->request('GET', 'http://example.com/redirect');
-        self::assertSame(302, $response->getStatusCode());
-        self::assertSame('redirected', $response->getContent(false));
+        $this->assertSame(302, $response->getStatusCode());
+        $this->assertSame('redirected', $response->getContent(false));
     }
 
     public function testETagRevalidation()
@@ -801,14 +804,14 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/etag');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(6);
 
         $response = $client->request('GET', 'http://example.com/etag');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testLastModifiedRevalidation()
@@ -825,14 +828,14 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/last-modified');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(6);
 
         $response = $client->request('GET', 'http://example.com/last-modified');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testAgeCalculation()
@@ -844,15 +847,15 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/age-test');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(3);
 
         $response = $client->request('GET', 'http://example.com/age-test');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
-        self::assertSame('3', $response->getHeaders()['age'][0]);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+        $this->assertSame('3', $response->getHeaders()['age'][0]);
     }
 
     public function testGatewayTimeoutOnMustRevalidateFailure()
@@ -868,13 +871,13 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/must-revalidate');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         sleep(2);
 
         $response = $client->request('GET', 'http://example.com/must-revalidate');
-        self::assertSame(504, $response->getStatusCode());
+        $this->assertSame(504, $response->getStatusCode());
     }
 
     public function testVaryAsteriskPreventsCaching()
@@ -887,12 +890,12 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/vary-asterisk');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $response = $client->request('GET', 'http://example.com/vary-asterisk');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testExcludedHeadersAreNotCached()
@@ -916,23 +919,23 @@ class CachingHttpClientTest extends TestCase
         $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
 
         $response = $client->request('GET', 'http://example.com/header-test');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         $cachedResponse = $client->request('GET', 'http://example.com/header-test');
-        self::assertSame(200, $cachedResponse->getStatusCode());
-        self::assertSame('foo', $cachedResponse->getContent());
+        $this->assertSame(200, $cachedResponse->getStatusCode());
+        $this->assertSame('foo', $cachedResponse->getContent());
 
         $cachedHeaders = $cachedResponse->getHeaders();
 
-        self::assertArrayNotHasKey('connection', $cachedHeaders);
-        self::assertArrayNotHasKey('proxy-authenticate', $cachedHeaders);
-        self::assertArrayNotHasKey('proxy-authentication-info', $cachedHeaders);
-        self::assertArrayNotHasKey('proxy-authorization', $cachedHeaders);
+        $this->assertArrayNotHasKey('connection', $cachedHeaders);
+        $this->assertArrayNotHasKey('proxy-authenticate', $cachedHeaders);
+        $this->assertArrayNotHasKey('proxy-authentication-info', $cachedHeaders);
+        $this->assertArrayNotHasKey('proxy-authorization', $cachedHeaders);
 
-        self::assertArrayHasKey('cache-control', $cachedHeaders);
-        self::assertArrayHasKey('content-type', $cachedHeaders);
-        self::assertArrayHasKey('x-custom-header', $cachedHeaders);
+        $this->assertArrayHasKey('cache-control', $cachedHeaders);
+        $this->assertArrayHasKey('content-type', $cachedHeaders);
+        $this->assertArrayHasKey('x-custom-header', $cachedHeaders);
     }
 
     public function testHeuristicFreshnessWithLastModified()
@@ -950,22 +953,22 @@ class CachingHttpClientTest extends TestCase
 
         // First request caches with heuristic
         $response = $client->request('GET', 'http://example.com/heuristic');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         // Heuristic: 10% of 3600s = 360s; should be fresh within this time
         sleep(359); // 5 minutes
 
         $response = $client->request('GET', 'http://example.com/heuristic');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('foo', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
 
         // After heuristic expires
         sleep(2); // Total 361s, past 360s heuristic
 
         $response = $client->request('GET', 'http://example.com/heuristic');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('bar', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testResponseInfluencingHeadersAffectCacheKey()
@@ -984,18 +987,18 @@ class CachingHttpClientTest extends TestCase
 
         // First request with Accept-Language: en
         $response = $client->request('GET', 'http://example.com/lang-test', ['headers' => ['Accept-Language' => 'en']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('response for en', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('response for en', $response->getContent());
 
         // Same request with Accept-Language: en should return cached response
         $response = $client->request('GET', 'http://example.com/lang-test', ['headers' => ['Accept-Language' => 'en']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('response for en', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('response for en', $response->getContent());
 
         // Request with Accept-Language: fr should fetch new response
         $response = $client->request('GET', 'http://example.com/lang-test', ['headers' => ['Accept-Language' => 'fr']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('response for fr', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('response for fr', $response->getContent());
     }
 
     public function testUnsafeInvalidationInBypassFlow()
@@ -1010,16 +1013,16 @@ class CachingHttpClientTest extends TestCase
 
         // Warm cache with GET
         $response = $client->request('GET', 'http://example.com/unsafe-test');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('initial get', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('initial get', $response->getContent());
 
         // Unsafe POST with body (bypasses cache but invalidates on success)
         $client->request('POST', 'http://example.com/unsafe-test', ['body' => 'invalidate']);
 
         // Next GET should miss cache and fetch new
         $response = $client->request('GET', 'http://example.com/unsafe-test');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('after invalidate', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('after invalidate', $response->getContent());
     }
 
     public function testNoInvalidationOnErrorInBypassFlow()
@@ -1034,17 +1037,17 @@ class CachingHttpClientTest extends TestCase
 
         // Warm cache with GET
         $response = $client->request('GET', 'http://example.com/no-invalidate-test');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('initial get', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('initial get', $response->getContent());
 
         // Unsafe POST with body (bypasses cache, but 500 shouldn't invalidate)
         $response = $client->request('POST', 'http://example.com/no-invalidate-test', ['body' => 'no invalidate']);
-        self::assertSame(500, $response->getStatusCode());
+        $this->assertSame(500, $response->getStatusCode());
 
         // Next GET should hit cache
         $response = $client->request('GET', 'http://example.com/no-invalidate-test');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('initial get', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('initial get', $response->getContent());
     }
 
     public function testMultipleValuesForResponseInfluencingHeadersAffectCacheKey()
@@ -1066,23 +1069,89 @@ class CachingHttpClientTest extends TestCase
 
         // First request with Accept-Language: de
         $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => 'de']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('response for de', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('response for de', $response->getContent());
 
         // Same request with Accept-Language: de should return cached response
         $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => 'de']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('response for de', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('response for de', $response->getContent());
 
         // Request with multiple Accept-Language values should fetch new response
         // because the cache key includes all header values
         $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => ['de', 'fr']]]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('response for de-fr', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('response for de-fr', $response->getContent());
 
         // Request with only Accept-Language: fr should fetch yet another response
         $response = $client->request('GET', 'http://example.com/lang-multi', ['headers' => ['Accept-Language' => 'fr']]);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('response for fr', $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('response for fr', $response->getContent());
+    }
+
+    public function testETagRevalidationWithTraceableClient()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=5'],
+            ]),
+            new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"abc123"']]),
+        ]);
+
+        $cachingClient = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client = new TraceableHttpClient($cachingClient);
+
+        $response = $client->request('GET', 'http://example.com/etag-traceable');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+
+        sleep(6);
+
+        $response = $client->request('GET', 'http://example.com/etag-traceable');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testStaleResponseWithTraceableClient()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['Cache-Control' => 'max-age=1, stale-if-error=60'],
+            ]),
+            new MockResponse('', ['http_code' => 500]),
+        ]);
+
+        $cachingClient = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client = new TraceableHttpClient($cachingClient);
+
+        $response = $client->request('GET', 'http://example.com/stale-traceable');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/stale-traceable');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testETagRevalidationWithNativeHttpClient()
+    {
+        TestHttpServer::start();
+
+        $client = new TraceableHttpClient(new CachingHttpClient(new NativeHttpClient(), $this->cacheAdapter));
+
+        $response = $client->request('GET', 'http://localhost:8057/304/etag');
+        $this->assertSame(200, $response->getStatusCode());
+        if (!$body = $response->getContent()) {
+            $this->markTestSkipped('Legacy symfony/http-client-contracts in use');
+        }
+
+        // the server returns 304 when If-None-Match matches
+        $response = $client->request('GET', 'http://localhost:8057/304/etag');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame($body, $response->getContent());
     }
 }
