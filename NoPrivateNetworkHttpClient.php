@@ -12,10 +12,8 @@
 namespace Symfony\Component\HttpClient;
 
 use Symfony\Component\HttpClient\Exception\TransportException;
-use Symfony\Component\HttpClient\Response\AsyncContext;
-use Symfony\Component\HttpClient\Response\AsyncResponse;
+use Symfony\Component\HttpClient\Internal\FollowRedirectsTrait;
 use Symfony\Component\HttpFoundation\IpUtils;
-use Symfony\Contracts\HttpClient\ChunkInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 use Symfony\Contracts\Service\ResetInterface;
@@ -29,6 +27,7 @@ use Symfony\Contracts\Service\ResetInterface;
 final class NoPrivateNetworkHttpClient implements HttpClientInterface, ResetInterface
 {
     use AsyncDecoratorTrait;
+    use FollowRedirectsTrait;
     use HttpClientTrait;
 
     private array $defaultOptions = self::OPTIONS_DEFAULTS;
@@ -80,19 +79,22 @@ final class NoPrivateNetworkHttpClient implements HttpClientInterface, ResetInte
     {
         [$url, $options] = self::prepareRequest($method, $url, $options, $this->defaultOptions, true);
 
-        $redirectHeaders = parse_url($url['authority']);
-        $host = $redirectHeaders['host'];
+        $host = parse_url($url['authority'], \PHP_URL_HOST);
         $url = implode('', $url);
+
         $dnsCache = $this->dnsCache;
-
-        $ip = self::dnsResolve($dnsCache, $host, $this->ipFlags, $options);
-        self::ipCheck($ip, $this->subnets, $this->allowList, $this->ipFlags, $host, $url);
-
-        $onProgress = $options['on_progress'] ?? null;
         $subnets = $this->subnets;
         $allowList = $this->allowList;
         $ipFlags = $this->ipFlags;
 
+        $checkHost = static function (string $host, string $url, array &$options) use ($dnsCache, $subnets, $allowList, $ipFlags): void {
+            $ip = self::dnsResolve($dnsCache, $host, $ipFlags, $options);
+            self::ipCheck($ip, $subnets, $allowList, $ipFlags, $host, $url);
+        };
+
+        $checkHost($host, $url, $options);
+
+        $onProgress = $options['on_progress'] ?? null;
         $options['on_progress'] = static function (int $dlNow, int $dlSize, array $info) use ($onProgress, $subnets, $allowList, $ipFlags): void {
             static $lastPrimaryIp = '';
 
@@ -104,64 +106,7 @@ final class NoPrivateNetworkHttpClient implements HttpClientInterface, ResetInte
             null !== $onProgress && $onProgress($dlNow, $dlSize, $info);
         };
 
-        if (0 >= $maxRedirects = $options['max_redirects']) {
-            return new AsyncResponse($this->client, $method, $url, $options);
-        }
-
-        $options['max_redirects'] = 0;
-        $redirectHeaders['with_auth'] = $redirectHeaders['no_auth'] = $options['headers'];
-
-        if (isset($options['normalized_headers']['host']) || isset($options['normalized_headers']['authorization']) || isset($options['normalized_headers']['cookie'])) {
-            $redirectHeaders['no_auth'] = array_filter($redirectHeaders['no_auth'], static fn ($h) => 0 !== stripos($h, 'Host:') && 0 !== stripos($h, 'Authorization:') && 0 !== stripos($h, 'Cookie:'));
-        }
-
-        return new AsyncResponse($this->client, $method, $url, $options, static function (ChunkInterface $chunk, AsyncContext $context) use (&$method, &$options, $maxRedirects, &$redirectHeaders, $subnets, $allowList, $ipFlags, $dnsCache): \Generator {
-            if (null !== $chunk->getError() || $chunk->isTimeout() || !$chunk->isFirst()) {
-                yield $chunk;
-
-                return;
-            }
-
-            $statusCode = $context->getStatusCode();
-
-            if ($statusCode < 300 || 400 <= $statusCode || null === $url = $context->getInfo('redirect_url')) {
-                $context->passthru();
-
-                yield $chunk;
-
-                return;
-            }
-
-            $host = parse_url($url, \PHP_URL_HOST);
-            $ip = self::dnsResolve($dnsCache, $host, $ipFlags, $options);
-            self::ipCheck($ip, $subnets, $allowList, $ipFlags, $host, $url);
-
-            // Do like curl and browsers: turn POST to GET on 301, 302 and 303
-            if (303 === $statusCode || 'POST' === $method && \in_array($statusCode, [301, 302], true)) {
-                $method = 'HEAD' === $method ? 'HEAD' : 'GET';
-                unset($options['body'], $options['json']);
-
-                if (isset($options['normalized_headers']['content-length']) || isset($options['normalized_headers']['content-type']) || isset($options['normalized_headers']['transfer-encoding'])) {
-                    $filterContentHeaders = static fn ($h) => 0 !== stripos($h, 'Content-Length:') && 0 !== stripos($h, 'Content-Type:') && 0 !== stripos($h, 'Transfer-Encoding:');
-                    $options['headers'] = array_filter($options['headers'], $filterContentHeaders);
-                    $redirectHeaders['no_auth'] = array_filter($redirectHeaders['no_auth'], $filterContentHeaders);
-                    $redirectHeaders['with_auth'] = array_filter($redirectHeaders['with_auth'], $filterContentHeaders);
-                }
-            }
-
-            // Authorization and Cookie headers MUST NOT follow except for the initial host name
-            $port = parse_url($url, \PHP_URL_PORT);
-            $options['headers'] = $redirectHeaders['host'] === $host && ($redirectHeaders['port'] ?? null) === $port ? $redirectHeaders['with_auth'] : $redirectHeaders['no_auth'];
-
-            static $redirectCount = 0;
-            $context->setInfo('redirect_count', ++$redirectCount);
-
-            $context->replaceRequest($method, $url, $options);
-
-            if ($redirectCount >= $maxRedirects) {
-                $context->passthru();
-            }
-        });
+        return $this->followRedirects($method, $url, $host, $options, $checkHost);
     }
 
     public function withOptions(array $options): static
