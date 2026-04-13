@@ -385,7 +385,7 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
         $client = $this->getHttpClient(__FUNCTION__);
 
         $traceInfo = [];
-        $client->request('GET', 'http://localhost:8057', ['on_progress' => function (int $dlNow, int $dlSize, array $info) use (&$traceInfo) {
+        $client->request('GET', 'http://localhost:8057', ['on_progress' => static function (int $dlNow, int $dlSize, array $info) use (&$traceInfo) {
             $traceInfo = $info;
         }]);
 
@@ -715,7 +715,7 @@ abstract class HttpClientTestCase extends BaseHttpClientTestCase
             $client = $this->getHttpClient(__FUNCTION__);
 
             $response = $client->request('HEAD', 'http://localhost:8057/head', [
-                'body' => fn () => '',
+                'body' => static fn () => '',
             ]);
             $headers = $response->getHeaders();
         } finally {
