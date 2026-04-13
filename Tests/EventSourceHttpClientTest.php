@@ -41,45 +41,45 @@ class EventSourceHttpClientTest extends TestCase
 
             return new MockResponse([
                 str_replace("\n", $sep, <<<TXT
-event: builderror
-id: 46
-data: {"foo": "bar"}
+                    event: builderror
+                    id: 46
+                    data: {"foo": "bar"}
 
-event: reload
-id: 47
-data: {}
+                    event: reload
+                    id: 47
+                    data: {}
 
-: this is a oneline comment
+                    : this is a oneline comment
 
-: this is a
-: multiline comment
+                    : this is a
+                    : multiline comment
 
-: comments are ignored
-event: reload
+                    : comments are ignored
+                    event: reload
 
-TXT
+                    TXT
                 ),
                 str_replace("\n", $sep, <<<TXT
-: anywhere
-id: 48
-data: {}
+                    : anywhere
+                    id: 48
+                    data: {}
 
-data: test
-data:test
-id: 49
-event: testEvent
+                    data: test
+                    data:test
+                    id: 49
+                    event: testEvent
 
 
-id: 50
-data: <tag>
-data
-data:   <foo />
-data
-data: </tag>
+                    id: 50
+                    data: <tag>
+                    data
+                    data:   <foo />
+                    data
+                    data: </tag>
 
-id: 60
-data
-TXT
+                    id: 60
+                    data
+                    TXT
                 ),
             ], [
                 'canceled' => false,
