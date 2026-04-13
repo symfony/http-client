@@ -59,11 +59,11 @@ class HttplugClientTest extends TestCase
         $promise = $client->sendAsyncRequest($client->createRequest('GET', 'http://localhost:8057'));
         $successCallableCalled = false;
         $failureCallableCalled = false;
-        $promise->then(function (ResponseInterface $response) use (&$successCallableCalled) {
+        $promise->then(static function (ResponseInterface $response) use (&$successCallableCalled) {
             $successCallableCalled = true;
 
             return $response;
-        }, function (\Exception $exception) use (&$failureCallableCalled) {
+        }, static function (\Exception $exception) use (&$failureCallableCalled) {
             $failureCallableCalled = true;
 
             throw $exception;
@@ -91,11 +91,11 @@ class HttplugClientTest extends TestCase
         $successCallableCalled = false;
         $failureCallableCalled = false;
         $client->sendAsyncRequest($client->createRequest('GET', 'http://localhost:8057/timeout-body'))
-            ->then(function (ResponseInterface $response) use (&$successCallableCalled) {
+            ->then(static function (ResponseInterface $response) use (&$successCallableCalled) {
                 $successCallableCalled = true;
 
                 return $response;
-            }, function (\Exception $exception) use (&$failureCallableCalled) {
+            }, static function (\Exception $exception) use (&$failureCallableCalled) {
                 $failureCallableCalled = true;
 
                 throw $exception;
@@ -137,11 +137,11 @@ class HttplugClientTest extends TestCase
         $promise = $client->sendAsyncRequest($client->createRequest('GET', 'http://localhost:8058'));
         $successCallableCalled = false;
         $failureCallableCalled = false;
-        $promise->then(function (ResponseInterface $response) use (&$successCallableCalled) {
+        $promise->then(static function (ResponseInterface $response) use (&$successCallableCalled) {
             $successCallableCalled = true;
 
             return $response;
-        }, function (\Exception $exception) use (&$failureCallableCalled) {
+        }, static function (\Exception $exception) use (&$failureCallableCalled) {
             $failureCallableCalled = true;
 
             throw $exception;
@@ -180,7 +180,7 @@ class HttplugClientTest extends TestCase
 
                     return $client->sendAsyncRequest($client->createRequest('GET', 'http://localhost:8057'));
                 },
-                function (\Exception $exception) use (&$failureCallableCalled) {
+                static function (\Exception $exception) use (&$failureCallableCalled) {
                     $failureCallableCalled = true;
 
                     throw $exception;
@@ -204,7 +204,7 @@ class HttplugClientTest extends TestCase
 
         $promise = $client
             ->sendAsyncRequest($client->createRequest('GET', 'http://localhost:8057/chunked-broken'))
-            ->then(function (ResponseInterface $response) use (&$successCallableCalled) {
+            ->then(static function (ResponseInterface $response) use (&$successCallableCalled) {
                 $successCallableCalled = true;
 
                 return $response;
@@ -229,7 +229,7 @@ class HttplugClientTest extends TestCase
         $isFirstRequest = true;
         $errorMessage = 'Error occurred before making the actual request.';
 
-        $client = new HttplugClient(new MockHttpClient(function () use (&$isFirstRequest, $errorMessage) {
+        $client = new HttplugClient(new MockHttpClient(static function () use (&$isFirstRequest, $errorMessage) {
             if ($isFirstRequest) {
                 $isFirstRequest = false;
                 throw new TransportException($errorMessage);
@@ -246,7 +246,7 @@ class HttplugClientTest extends TestCase
         $promise = $client
             ->sendAsyncRequest($request)
             ->then(
-                function (ResponseInterface $response) use (&$successCallableCalled) {
+                static function (ResponseInterface $response) use (&$successCallableCalled) {
                     $successCallableCalled = true;
 
                     return $response;
@@ -257,7 +257,7 @@ class HttplugClientTest extends TestCase
                     $failureCallableCalled = true;
 
                     // Ensure arbitrary levels of promises work.
-                    return (new FulfilledPromise(null))->then(fn () => (new GuzzleFulfilledPromise(null))->then(fn () => $client->sendAsyncRequest($request)));
+                    return (new FulfilledPromise(null))->then(static fn () => (new GuzzleFulfilledPromise(null))->then(static fn () => $client->sendAsyncRequest($request)));
                 }
             )
         ;

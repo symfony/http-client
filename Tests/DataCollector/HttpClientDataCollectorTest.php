@@ -488,7 +488,7 @@ class HttpClientDataCollectorTest extends TestCase
     public static function provideClientIsResetWhenExpectedCases(): iterable
     {
         yield [
-            function (TraceableHttpClient $traceableHttpClient) {
+            static function (TraceableHttpClient $traceableHttpClient) {
                 $response = $traceableHttpClient->request('GET', 'http://localhost/');
                 $response->getContent();
             },
@@ -496,7 +496,7 @@ class HttpClientDataCollectorTest extends TestCase
         ];
 
         yield [
-            fn () => null,
+            static fn () => null,
             false,
         ];
     }

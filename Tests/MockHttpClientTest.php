@@ -427,7 +427,7 @@ class MockHttpClientTest extends HttpClientTestCase
             case 'testResolve':
                 $responses[] = new MockResponse($body, ['response_headers' => $headers]);
                 $responses[] = new MockResponse($body, ['response_headers' => $headers]);
-                $responses[] = new MockResponse((function () { yield ''; })(), ['response_headers' => $headers]);
+                $responses[] = new MockResponse((static function () { yield ''; })(), ['response_headers' => $headers]);
                 break;
 
             case 'testTimeoutOnStream':
@@ -474,7 +474,7 @@ class MockHttpClientTest extends HttpClientTestCase
 
             case 'testNonBlockingStream':
             case 'testSeekAsyncStream':
-                $responses[] = new MockResponse((function () {
+                $responses[] = new MockResponse((static function () {
                     yield '<1>';
                     yield '';
                     yield '<2>';

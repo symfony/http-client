@@ -45,7 +45,7 @@ class CachingHttpClientTest extends TestCase
     {
         $capturedHeaders = null;
 
-        $mockClient = new MockHttpClient(function (string $method, string $url, array $options) use (&$capturedHeaders) {
+        $mockClient = new MockHttpClient(static function (string $method, string $url, array $options) use (&$capturedHeaders) {
             $capturedHeaders = $options['normalized_headers'];
 
             return new MockResponse();
