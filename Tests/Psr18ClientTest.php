@@ -121,15 +121,13 @@ class Psr18ClientTest extends TestCase
 
     public function testAutoUpgradeHttpVersion()
     {
-        $clientWithoutOption = new Psr18Client(new MockHttpClient(static function (string $method, string $url, array $options) {
-            return new MockResponse(json_encode([
-                'SERVER_PROTOCOL' => 'HTTP/'.$options['http_version'] ?? '',
-            ]), [
-                'response_headers' => [
-                    'Content-Type' => 'application/json',
-                ],
-            ]);
-        }));
+        $clientWithoutOption = new Psr18Client(new MockHttpClient(static fn (string $method, string $url, array $options) => new MockResponse(json_encode([
+            'SERVER_PROTOCOL' => 'HTTP/'.$options['http_version'] ?? '',
+        ]), [
+            'response_headers' => [
+                'Content-Type' => 'application/json',
+            ],
+        ])));
         $clientWithOptionFalse = $clientWithoutOption->withOptions(['auto_upgrade_http_version' => false]);
 
         foreach (['1.0', '1.1', '2.0', '3.0'] as $httpVersion) {
