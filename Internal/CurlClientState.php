@@ -71,9 +71,10 @@ final class CurlClientState extends ClientState
             curl_share_setopt($this->share, \CURLSHOPT_SHARE, \CURL_LOCK_DATA_DNS);
             curl_share_setopt($this->share, \CURLSHOPT_SHARE, \CURL_LOCK_DATA_SSL_SESSION);
 
-            if (\defined('CURL_LOCK_DATA_CONNECT')) {
-                curl_share_setopt($this->share, \CURLSHOPT_SHARE, \CURL_LOCK_DATA_CONNECT);
-            }
+            // Don't share CURL_LOCK_DATA_CONNECT: easy handles attached to the same multi handle
+            // already share the connection cache, and adding it here creates a second pool that
+            // bypasses CURLMOPT_MAX_HOST_CONNECTIONS.
+            // See https://curl.se/libcurl/c/CURLSHOPT_SHARE.html#CURLLOCKDATACONNECT
 
             return $this->share;
         }
