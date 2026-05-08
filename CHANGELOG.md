@@ -9,6 +9,7 @@ CHANGELOG
  * Add `GuzzleHttpHandler` that allows using Symfony HttpClient as a Guzzle handler
  * Change `$maxTtl` argument of `CachingHttpClient` to default to `86400` (24h) instead of `null`
  * Deprecate passing `null` as `$maxTtl` to `CachingHttpClient`, pass a positive integer instead
+ * Make `CachingHttpClient` implement `Psr\Log\LoggerAwareInterface` to log when a stale cached response is served because the upstream call failed (`stale-if-error` fallback)
 
 8.0
 ---

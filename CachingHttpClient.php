@@ -11,6 +11,8 @@
 
 namespace Symfony\Component\HttpClient;
 
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpClient\Caching\Freshness;
 use Symfony\Component\HttpClient\Chunk\ErrorChunk;
 use Symfony\Component\HttpClient\Exception\ChunkCacheItemNotFoundException;
@@ -40,7 +42,7 @@ use Symfony\Contracts\Service\ResetInterface;
  *
  * @see https://www.rfc-editor.org/rfc/rfc9111
  */
-class CachingHttpClient implements HttpClientInterface, ResetInterface
+class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, ResetInterface
 {
     use AsyncDecoratorTrait {
         stream as asyncStream;
@@ -94,6 +96,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
     private array $defaultOptions = self::OPTIONS_DEFAULTS;
     private bool $isInnerRequest = false;
+    private ?LoggerInterface $logger = null;
 
     /**
      * @param bool         $sharedCache Indicates whether this cache is shared or private. When true, responses
@@ -117,6 +120,11 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         if ($defaultOptions) {
             [, $this->defaultOptions] = self::prepareRequest(null, null, $defaultOptions, $this->defaultOptions);
         }
+    }
+
+    public function setLogger(LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
     }
 
     public function request(string $method, string $url, array $options = []): ResponseInterface
@@ -205,6 +213,11 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                 null !== $attemptTag && $this->cache->invalidateTags([$attemptTag]);
 
                 if (Freshness::StaleButUsable === $freshness) {
+                    $this->logger?->info('Serving stale cached response for "{method} {url}" because the upstream call failed: {error}.', [
+                        'method' => $method,
+                        'url' => $url,
+                        'error' => $chunk instanceof ErrorChunk ? $chunk->getError() : 'timeout',
+                    ]);
                     // avoid throwing exception in ErrorChunk#__destruct()
                     $chunk instanceof ErrorChunk && $chunk->didThrow(true);
                     $context->passthru();
@@ -259,6 +272,11 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
                 if ($statusCode >= 500 && $statusCode < 600) {
                     if (Freshness::StaleButUsable === $freshness) {
+                        $this->logger?->info('Serving stale cached response for "{method} {url}" because the upstream returned a server error (HTTP {status}).', [
+                            'method' => $method,
+                            'url' => $url,
+                            'status' => $statusCode,
+                        ]);
                         $context->passthru();
                         $context->replaceResponse($this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey));
 

@@ -14,6 +14,9 @@ namespace Symfony\Component\HttpClient\Tests;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\AbstractLogger;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Bridge\PhpUnit\ClockMock;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\Cache\Adapter\TagAwareAdapter;
@@ -243,6 +246,100 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://example.com/foo-bar');
         $this->assertSame(404, $response->getStatusCode());
         $this->assertSame('foo', $response->getContent(false));
+    }
+
+    public function testItLogsWhenStaleIfErrorFallsBackOnUpstreamServerError()
+    {
+        $logger = new class extends AbstractLogger {
+            public array $logs = [];
+
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->logs[] = [$level, (string) $message, $context];
+            }
+        };
+
+        $client = new CachingHttpClient(
+            new MockHttpClient([
+                new MockResponse('foo', [
+                    'http_code' => 200,
+                    'response_headers' => [
+                        'Cache-Control' => 'max-age=1, stale-if-error=5',
+                    ],
+                ]),
+                new MockResponse('Service Unavailable', ['http_code' => 503]),
+            ]),
+            $this->cacheAdapter,
+            [],
+            false,
+        );
+        $client->setLogger($logger);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+        $this->assertSame([], $logger->logs);
+
+        sleep(5);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+
+        $this->assertCount(1, $logger->logs);
+        [$level, $message, $context] = $logger->logs[0];
+        $this->assertSame('info', $level);
+        $this->assertStringContainsString('stale cached response', $message);
+        $this->assertSame('GET', $context['method']);
+        $this->assertSame('http://example.com/foo-bar', $context['url']);
+        $this->assertSame(503, $context['status']);
+    }
+
+    public function testItLogsWhenStaleIfErrorFallsBackOnUpstreamTransportError()
+    {
+        $logger = new class extends AbstractLogger {
+            public array $logs = [];
+
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->logs[] = [$level, (string) $message, $context];
+            }
+        };
+
+        $client = new CachingHttpClient(
+            new MockHttpClient([
+                new MockResponse('foo', [
+                    'http_code' => 200,
+                    'response_headers' => [
+                        'Cache-Control' => 'max-age=1, stale-if-error=5',
+                    ],
+                ]),
+                new MockResponse('', ['error' => 'Simulated transport error']),
+            ]),
+            $this->cacheAdapter,
+            [],
+            false,
+        );
+        $client->setLogger($logger);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+        $this->assertSame([], $logger->logs);
+
+        sleep(5);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+
+        $this->assertCount(1, $logger->logs);
+        [$level, $message, $context] = $logger->logs[0];
+        $this->assertSame('info', $level);
+        $this->assertStringContainsString('upstream call failed', $message);
+        $this->assertSame('GET', $context['method']);
+        $this->assertSame('http://example.com/foo-bar', $context['url']);
+        $this->assertNotEmpty($context['error']);
     }
 
     public function testPrivateCacheWithSharedCacheFalse()
