@@ -76,11 +76,13 @@ class CurlHttpClientTest extends HttpClientTestCase
 
         self::assertFalse(isset($state->handle));
         self::assertFalse(isset($state->share));
+        self::assertFalse(isset($state->persistentShare));
 
         $client->request('GET', 'http://127.0.0.1:8057/json')->getStatusCode();
 
         self::assertInstanceOf(\CurlMultiHandle::class, $state->handle);
         self::assertInstanceOf(\CurlShareHandle::class, $state->share);
+        self::assertFalse(isset($state->persistentShare));
     }
 
     public function testCurlClientPersistentStateInitializesHandlesLazily()
@@ -97,8 +99,14 @@ class CurlHttpClientTest extends HttpClientTestCase
         $client->request('GET', 'http://127.0.0.1:8057/json')->getStatusCode();
 
         self::assertInstanceOf(\CurlMultiHandle::class, $state->handle);
-        self::assertInstanceOf(\CurlShareHandle::class, $state->share);
-        self::assertInstanceOf(\PHP_VERSION_ID >= 80500 ? \CurlSharePersistentHandle::class : \CurlShareHandle::class, $state->persistentShare);
+
+        if (\PHP_VERSION_ID >= 80500) {
+            self::assertFalse(isset($state->share));
+            self::assertInstanceOf(\CurlSharePersistentHandle::class, $state->persistentShare);
+        } else {
+            self::assertInstanceOf(\CurlShareHandle::class, $state->share);
+            self::assertSame($state->share, $state->persistentShare);
+        }
     }
 
     public function testProcessAfterReset()

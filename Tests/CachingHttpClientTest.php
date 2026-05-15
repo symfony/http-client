@@ -13,6 +13,7 @@ namespace Symfony\Component\HttpClient\Tests;
 
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use PHPUnit\Framework\TestCase;
 use Symfony\Bridge\PhpUnit\ClockMock;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
@@ -704,6 +705,33 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('foo', $response->getContent());
     }
 
+    public function testETagRevalidationServesMergedHeaders()
+    {
+        $client = $this->buildClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"v1"', 'X-Stable' => 'unchanged', 'Cache-Control' => 'max-age=1'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"v2"', 'X-Fresh' => 'updated'],
+            ]),
+        ]);
+
+        $response = $client->request('GET', 'http://example.com/etag-merge');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/etag-merge');
+        $headers = $response->getHeaders();
+        $this->assertSame('foo', $response->getContent());
+        $this->assertSame('"v2"', $headers['etag'][0]);
+        $this->assertSame('updated', $headers['x-fresh'][0]);
+        $this->assertSame('unchanged', $headers['x-stable'][0]);
+    }
+
     public function testLastModifiedRevalidation()
     {
         $lastModified = 'Wed, 21 Oct 2015 07:28:00 GMT';
@@ -1023,6 +1051,15 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://localhost:8057/304/etag');
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame($body, $response->getContent());
+    }
+
+    #[IgnoreDeprecations]
+    #[Group('legacy')]
+    public function testNullMaxTtlTriggersDeprecation()
+    {
+        $this->expectUserDeprecationMessage('Since symfony/http-client 8.1: Passing null as "$maxTtl" to "Symfony\Component\HttpClient\CachingHttpClient::__construct()" is deprecated, pass a positive integer instead.');
+
+        new CachingHttpClient(new MockHttpClient([]), $this->cacheAdapter, [], true, null);
     }
 
     /**

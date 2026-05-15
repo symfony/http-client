@@ -253,13 +253,13 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
                     $cacheControl = self::parseCacheControlHeader($headers['cache-control'] ?? []);
                     $maxAge = $this->determineMaxAge($headers, $cacheControl);
 
-                    $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $expiresAt, $fullUrlTag, $metadataKey): array {
-                        $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
+                    $cachedData['expires_at'] = self::calculateExpiresAt($maxAge);
+                    $cachedData['stored_at'] = time();
+                    $cachedData['initial_age'] = self::getCurrentAge($headers);
+                    $cachedData['headers'] = $headers;
 
-                        $cachedData['expires_at'] = self::calculateExpiresAt($maxAge);
-                        $cachedData['stored_at'] = time();
-                        $cachedData['initial_age'] = self::getCurrentAge($headers);
-                        $cachedData['headers'] = $headers;
+                    $this->cache->get($metadataKey, static function (ItemInterface $item) use ($cachedData, $expiresAt, $fullUrlTag, $metadataKey): array {
+                        $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
 
                         return $cachedData;
                     }, \INF);
