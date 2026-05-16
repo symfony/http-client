@@ -39,8 +39,8 @@ use Symfony\Contracts\Service\ResetInterface;
  *   2. stale-while-revalidate:
  *     - There's no actual "background revalidation" for stale responses, they will
  *       always be revalidated.
- *   3. min-fresh, max-stale, only-if-cached:
- *     - Request directives are not parsed; the client ignores them.
+ *   3. min-fresh, max-stale:
+ *     - These request directives are not parsed; the client ignores them.
  *
  * @see https://www.rfc-editor.org/rfc/rfc9111
  */
@@ -163,8 +163,13 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
         $fullUrl = implode('', $fullUrl);
         $fullUrlTag = self::hash($fullUrl);
+        $requestCacheControl = self::parseRequestCacheControlHeader($options['normalized_headers']['cache-control'] ?? []);
 
         if ('' !== $options['body'] || ($options['extra']['no_cache'] ?? false) || isset($options['normalized_headers']['range']) || !\in_array($method, self::CACHEABLE_METHODS, true)) {
+            if (isset($requestCacheControl['only-if-cached'])) {
+                return self::createGatewayTimeoutResponse($method, $url, $options);
+            }
+
             $passthru = function (ChunkInterface $chunk, AsyncContext $context) use ($method, $fullUrlTag): \Generator {
                 if (null !== $chunk->getError() || $chunk->isTimeout() || !$chunk->isFirst()) {
                     yield $chunk;
@@ -191,6 +196,10 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             }
         }
 
+        if (isset($requestCacheControl['no-store'])) {
+            return new AsyncResponse($this->client, $method, $url, $options);
+        }
+
         $requestHash = self::hash($method.$fullUrl.serialize(array_intersect_key($options['normalized_headers'], self::RESPONSE_INFLUENCING_HEADERS)));
         $varyKey = "vary_{$requestHash}";
         $varyFields = $this->cache->get($varyKey, static fn ($item, &$save): array => ($save = false) ?: [], 0);
@@ -199,17 +208,24 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         $cachedData = $this->cache->get($metadataKey, static fn ($item, &$save): array => ($save = false) ?: [], 0);
         $hasClientConditionalValidator = isset($options['normalized_headers']['if-none-match']) || isset($options['normalized_headers']['if-modified-since']);
         $sentCacheValidator = false;
+        $allowStaleFallback = true;
 
         $freshness = null;
         if ($cachedData) {
             $freshness = $this->evaluateCacheFreshness($cachedData);
+            $cachedResponseAcceptable = $this->isCachedResponseAcceptable($cachedData, $requestCacheControl, $freshness);
+            $allowStaleFallback = $cachedResponseAcceptable || !$this->requestCacheControlRequiresRevalidation($cachedData, $requestCacheControl);
 
-            if (Freshness::Fresh === $freshness) {
+            if ($cachedResponseAcceptable) {
                 if ($hasClientConditionalValidator && self::clientValidatorMatchesCachedResponse($options['normalized_headers'], $cachedData)) {
                     return self::createNotModifiedResponse($method, $url, $options, $cachedData['headers']);
                 }
 
                 return $this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey);
+            }
+
+            if (isset($requestCacheControl['only-if-cached'])) {
+                return self::createGatewayTimeoutResponse($method, $url, $options);
             }
 
             if (!$hasClientConditionalValidator) {
@@ -223,6 +239,10 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                     $sentCacheValidator = true;
                 }
             }
+        }
+
+        if (isset($requestCacheControl['only-if-cached'])) {
+            return self::createGatewayTimeoutResponse($method, $url, $options);
         }
 
         // consistent expiration time for all items
@@ -242,6 +262,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             $options,
             $hasClientConditionalValidator,
             $sentCacheValidator,
+            $allowStaleFallback,
         ): \Generator {
             static $attemptTag = null;
             static $firstChunkKey = null;
@@ -250,7 +271,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             if (null !== $chunk->getError() || $chunk->isTimeout()) {
                 null !== $attemptTag && $this->cache->invalidateTags([$attemptTag]);
 
-                if (Freshness::StaleButUsable === $freshness) {
+                if ($allowStaleFallback && Freshness::StaleButUsable === $freshness) {
                     // avoid throwing exception in ErrorChunk#__destruct()
                     $chunk instanceof ErrorChunk && $chunk->didThrow(true);
                     $context->passthru();
@@ -340,7 +361,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                 }
 
                 if ($statusCode >= 500 && $statusCode < 600) {
-                    if (Freshness::StaleButUsable === $freshness) {
+                    if ($allowStaleFallback && Freshness::StaleButUsable === $freshness) {
                         $context->passthru();
                         $context->replaceResponse($this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey));
 
@@ -791,6 +812,23 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     }
 
     /**
+     * @param string[] $header
+     *
+     * @return array<string, string|true>
+     */
+    private static function parseRequestCacheControlHeader(array $header): array
+    {
+        $cacheControlHeader = [];
+
+        foreach ($header as $line) {
+            // Strip the "Cache-Control: " prefix added by normalizeHeaders(); response headers contain values only.
+            $cacheControlHeader[] = substr($line, 15);
+        }
+
+        return self::parseCacheControlHeader($cacheControlHeader);
+    }
+
+    /**
      * Evaluates the freshness of a cached response based on its headers and expiration time.
      *
      * This method determines the state of the cached response by analyzing the Cache-Control
@@ -800,9 +838,9 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
      */
     private function evaluateCacheFreshness(array $data): Freshness
     {
-        $parseCacheControlHeader = self::parseCacheControlHeader($data['headers']['cache-control'] ?? []);
+        $cacheControl = self::parseCacheControlHeader($data['headers']['cache-control'] ?? []);
 
-        if (isset($parseCacheControlHeader['no-cache'])) {
+        if (isset($cacheControl['no-cache'])) {
             return Freshness::Stale;
         }
 
@@ -814,12 +852,12 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         }
 
         if (
-            isset($parseCacheControlHeader['must-revalidate'])
+            isset($cacheControl['must-revalidate'])
             || (
                 $this->sharedCache
                 && (
-                    isset($parseCacheControlHeader['proxy-revalidate'])
-                    || self::hasValidSharedMaxAge($parseCacheControlHeader)
+                    isset($cacheControl['proxy-revalidate'])
+                    || self::hasValidSharedMaxAge($cacheControl)
                 )
             )
         ) {
@@ -827,7 +865,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         }
 
         if (
-            null !== ($staleIfError = self::parseDeltaSeconds($parseCacheControlHeader['stale-if-error'] ?? null))
+            null !== ($staleIfError = self::parseDeltaSeconds($cacheControl['stale-if-error'] ?? null))
             && ($now - $expires) <= $staleIfError
         ) {
             return Freshness::StaleButUsable;
@@ -956,6 +994,56 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         $correctedAgeValue = $ageValue + $responseDelay;
 
         return max($apparentAge, $correctedAgeValue);
+    }
+
+    /**
+     * @param array{initial_age: int, stored_at: int} $cachedData
+     * @param array<string, string|true>              $requestCacheControl
+     */
+    private function isCachedResponseAcceptable(array $cachedData, array $requestCacheControl, Freshness $freshness): bool
+    {
+        if (Freshness::Fresh !== $freshness || isset($requestCacheControl['no-cache'])) {
+            return false;
+        }
+
+        if (!isset($requestCacheControl['max-age'])) {
+            return true;
+        }
+
+        if (null === $maxAge = self::parseDeltaSeconds($requestCacheControl['max-age'])) {
+            return true;
+        }
+
+        if (0 === $maxAge) {
+            return false;
+        }
+
+        return $this->getCachedResponseAge($cachedData) <= $maxAge;
+    }
+
+    /**
+     * @param array{initial_age: int, stored_at: int} $cachedData
+     * @param array<string, string|true>              $requestCacheControl
+     */
+    private function requestCacheControlRequiresRevalidation(array $cachedData, array $requestCacheControl): bool
+    {
+        if (isset($requestCacheControl['no-cache'])) {
+            return true;
+        }
+
+        if (null === $maxAge = self::parseDeltaSeconds($requestCacheControl['max-age'] ?? null)) {
+            return false;
+        }
+
+        return $this->getCachedResponseAge($cachedData) > $maxAge;
+    }
+
+    /**
+     * @param array{initial_age: int, stored_at: int} $cachedData
+     */
+    private function getCachedResponseAge(array $cachedData): int
+    {
+        return $cachedData['initial_age'] + (time() - $cachedData['stored_at']);
     }
 
     /**
@@ -1154,7 +1242,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         return MockResponse::fromRequest($method, $url, $options, new MockResponse($body(), [
             'http_code' => $cachedData['status_code'],
             'response_headers' => [
-                'age' => $cachedData['initial_age'] + (time() - $cachedData['stored_at']),
+                'age' => $this->getCachedResponseAge($cachedData),
             ] + $cachedData['headers'],
         ]));
     }
