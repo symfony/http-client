@@ -83,9 +83,14 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
      */
     private const EXCLUDED_HEADERS = [
         'connection' => true,
+        'keep-alive' => true,
         'proxy-authenticate' => true,
         'proxy-authentication-info' => true,
         'proxy-authorization' => true,
+        'te' => true,
+        'trailer' => true,
+        'transfer-encoding' => true,
+        'upgrade' => true,
     ];
     /**
      * Maximum heuristic freshness lifetime in seconds (24 hours).
@@ -268,14 +273,15 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                     $requestTime = (int) ($context->getInfo('start_time') ?? $responseTime);
                     $correctedInitialAge = self::getCorrectedInitialAge($headers, $requestTime, $responseTime);
                     $maxAge = $this->determineMaxAge($headers, $cacheControl, $correctedInitialAge, $requestTime, $responseTime);
+                    $excludedHeaders = self::getExcludedHeaders($headers);
 
-                    $updatedCachedData = $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $expiresAt, $fullUrlTag, $metadataKey, $responseTime, $correctedInitialAge): array {
+                    $updatedCachedData = $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $expiresAt, $fullUrlTag, $metadataKey, $responseTime, $correctedInitialAge, $excludedHeaders): array {
                         $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
 
                         $cachedData['expires_at'] = self::calculateExpiresAt($maxAge);
                         $cachedData['stored_at'] = $responseTime;
                         $cachedData['initial_age'] = $correctedInitialAge;
-                        $cachedData['headers'] = array_merge($cachedData['headers'], array_diff_key($headers, self::EXCLUDED_HEADERS));
+                        $cachedData['headers'] = array_merge(array_diff_key($cachedData['headers'], $excludedHeaders), self::filterStorableHeaders($headers, $excludedHeaders));
 
                         return $cachedData;
                     }, \INF);
@@ -379,7 +385,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
                     return [
                         'status_code' => $context->getStatusCode(),
-                        'headers' => array_diff_key($headers, self::EXCLUDED_HEADERS),
+                        'headers' => self::filterStorableHeaders($headers),
                         'initial_age' => $correctedInitialAge,
                         'stored_at' => $responseTime,
                         'expires_at' => self::calculateExpiresAt($maxAge),
@@ -611,6 +617,40 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         }
 
         return (int) $value;
+    }
+
+    /**
+     * @param array<string, string[]> $headers
+     *
+     * @return array<string, string[]>
+     */
+    private static function filterStorableHeaders(array $headers, ?array $excludedHeaders = null): array
+    {
+        $excludedHeaders ??= self::getExcludedHeaders($headers);
+
+        return array_diff_key($headers, $excludedHeaders);
+    }
+
+    /**
+     * @param array<string, string[]> $headers
+     *
+     * @return array<string, bool>
+     */
+    private static function getExcludedHeaders(array $headers): array
+    {
+        $excludedHeaders = self::EXCLUDED_HEADERS;
+
+        foreach ($headers['connection'] ?? [] as $connectionHeader) {
+            foreach (explode(',', $connectionHeader) as $headerName) {
+                $headerName = strtolower(trim($headerName));
+
+                if ('' !== $headerName) {
+                    $excludedHeaders[$headerName] = true;
+                }
+            }
+        }
+
+        return $excludedHeaders;
     }
 
     /**

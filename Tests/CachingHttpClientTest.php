@@ -201,6 +201,83 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('bar', $response->getContent());
     }
 
+    public function testItDoesNotStoreConnectionNominatedHopByHopHeaders()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control: max-age=300',
+                    'Connection: X-Hop-By-Hop',
+                    'Keep-Alive: timeout=5',
+                    'TE: trailers',
+                    'Trailer: X-Trailer',
+                    'Transfer-Encoding: chunked',
+                    'Upgrade: websocket',
+                    'X-Hop-By-Hop: secret',
+                    'X-Keep: persisted',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame('secret', $response->getHeaders()['x-hop-by-hop'][0]);
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $headers = $response->getHeaders();
+
+        $this->assertArrayNotHasKey('x-hop-by-hop', $headers);
+        $this->assertArrayNotHasKey('keep-alive', $headers);
+        $this->assertArrayNotHasKey('te', $headers);
+        $this->assertArrayNotHasKey('trailer', $headers);
+        $this->assertArrayNotHasKey('transfer-encoding', $headers);
+        $this->assertArrayNotHasKey('upgrade', $headers);
+        $this->assertSame('persisted', $headers['x-keep'][0]);
+    }
+
+    public function testItDoesNotKeepConnectionNominatedHeadersAfter304Revalidation()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'ETag: "abc"',
+                    'Cache-Control: max-age=0',
+                    'X-Hop: old',
+                ],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => [
+                    'Connection: X-Hop',
+                    'X-Hop: new',
+                    'Cache-Control: max-age=300',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter, sharedCache: false);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame('old', $response->getHeaders()['x-hop'][0]);
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertArrayNotHasKey('x-hop', $response->getHeaders());
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertArrayNotHasKey('x-hop', $response->getHeaders());
+        $this->assertSame('foo', $response->getContent());
+    }
+
     public function testItDoesntServeAStaleResponse()
     {
         $mockClient = new MockHttpClient([
