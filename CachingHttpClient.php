@@ -264,21 +264,24 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                 $attemptTag = self::generateChunkKey();
 
                 if (304 === $statusCode && null !== $freshness) {
-                    $maxAge = $this->determineMaxAge($headers, $cacheControl);
+                    $responseTime = time();
+                    $requestTime = (int) ($context->getInfo('start_time') ?? $responseTime);
+                    $correctedInitialAge = self::getCorrectedInitialAge($headers, $requestTime, $responseTime);
+                    $maxAge = $this->determineMaxAge($headers, $cacheControl, $correctedInitialAge, $requestTime, $responseTime);
 
-                    $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $expiresAt, $fullUrlTag, $metadataKey): array {
+                    $updatedCachedData = $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $expiresAt, $fullUrlTag, $metadataKey, $responseTime, $correctedInitialAge): array {
                         $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
 
                         $cachedData['expires_at'] = self::calculateExpiresAt($maxAge);
-                        $cachedData['stored_at'] = time();
-                        $cachedData['initial_age'] = (int) ($headers['age'][0] ?? 0);
+                        $cachedData['stored_at'] = $responseTime;
+                        $cachedData['initial_age'] = $correctedInitialAge;
                         $cachedData['headers'] = array_merge($cachedData['headers'], array_diff_key($headers, self::EXCLUDED_HEADERS));
 
                         return $cachedData;
                     }, \INF);
 
                     $context->passthru();
-                    $context->replaceResponse($this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey, $expiresAt));
+                    $context->replaceResponse($this->createResponseFromCache($updatedCachedData, $method, $url, $options, $metadataKey, $expiresAt));
 
                     return;
                 }
@@ -367,15 +370,18 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                     ];
                 }, \INF);
 
-                $maxAge = $this->determineMaxAge($headers, self::parseCacheControlHeader($headers['cache-control'] ?? []));
-                $this->cache->get($metadataKey, static function (ItemInterface $item) use ($context, $headers, $maxAge, $expiresAt, $fullUrlTag, $metadataKey, $attemptTag, $firstChunkKey): array {
+                $requestTime = (int) ($context->getInfo('start_time') ?? time());
+                $responseTime = time();
+                $correctedInitialAge = self::getCorrectedInitialAge($headers, $requestTime, $responseTime);
+                $maxAge = $this->determineMaxAge($headers, self::parseCacheControlHeader($headers['cache-control'] ?? []), $correctedInitialAge, $requestTime, $responseTime);
+                $this->cache->get($metadataKey, static function (ItemInterface $item) use ($context, $headers, $maxAge, $expiresAt, $fullUrlTag, $metadataKey, $attemptTag, $firstChunkKey, $responseTime, $correctedInitialAge): array {
                     $item->tag([$fullUrlTag, $metadataKey, $attemptTag])->expiresAt($expiresAt);
 
                     return [
                         'status_code' => $context->getStatusCode(),
                         'headers' => array_diff_key($headers, self::EXCLUDED_HEADERS),
-                        'initial_age' => (int) ($headers['age'][0] ?? 0),
-                        'stored_at' => time(),
+                        'initial_age' => $correctedInitialAge,
+                        'stored_at' => $responseTime,
                         'expires_at' => self::calculateExpiresAt($maxAge),
                         'next_chunk' => $firstChunkKey,
                     ];
@@ -670,9 +676,9 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
      *
      * @return int|null The maximum age of the response, or null if it cannot be determined
      */
-    private function determineMaxAge(array $headers, array $cacheControl): ?int
+    private function determineMaxAge(array $headers, array $cacheControl, int $correctedInitialAge, int $requestTime, int $responseTime): ?int
     {
-        $age = self::getCurrentAge($headers);
+        $age = $correctedInitialAge;
 
         if ($this->sharedCache && isset($cacheControl['s-maxage'])) {
             if (null === $sharedMaxAge = self::parseDeltaSeconds($cacheControl['s-maxage'])) {
@@ -692,13 +698,14 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
         foreach ($headers['expires'] ?? [] as $expire) {
             if (false !== $expirationTimestamp = strtotime($expire)) {
-                $timeUntilExpiration = $expirationTimestamp - time() - $age;
+                $dateTimestamp = self::getDateHeaderTimestamp($headers) ?? $responseTime;
+                $timeUntilExpiration = $expirationTimestamp - $dateTimestamp - $age;
 
                 return max($timeUntilExpiration, 0);
             }
         }
 
-        if (null !== $heuristicFreshnessLifetime = $this->determineHeuristicFreshnessLifetime($headers, $cacheControl)) {
+        if (null !== $heuristicFreshnessLifetime = $this->determineHeuristicFreshnessLifetime($headers, $cacheControl, $requestTime)) {
             return max(0, $heuristicFreshnessLifetime - $age);
         }
 
@@ -709,7 +716,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
      * @param array<string, string|string[]> $headers
      * @param array<string, string|true>     $cacheControl
      */
-    private function determineHeuristicFreshnessLifetime(array $headers, array $cacheControl): ?int
+    private function determineHeuristicFreshnessLifetime(array $headers, array $cacheControl, int $requestTime): ?int
     {
         if (!$this->allowsHeuristicFreshness($headers, $cacheControl)) {
             return null;
@@ -720,7 +727,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                 continue;
             }
 
-            $secondsSinceLastModified = time() - $lastModifiedTimestamp;
+            $secondsSinceLastModified = $requestTime - $lastModifiedTimestamp;
 
             if (0 >= $secondsSinceLastModified) {
                 continue;
@@ -744,6 +751,34 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     private static function getCurrentAge(array $headers): int
     {
         return (int) ($headers['age'][0] ?? 0);
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     */
+    private static function getDateHeaderTimestamp(array $headers): ?int
+    {
+        foreach ($headers['date'] ?? [] as $date) {
+            if (false !== $timestamp = strtotime($date)) {
+                return $timestamp;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     */
+    private static function getCorrectedInitialAge(array $headers, int $requestTime, int $responseTime): int
+    {
+        $ageValue = self::getCurrentAge($headers);
+        $dateValue = self::getDateHeaderTimestamp($headers);
+        $apparentAge = null === $dateValue ? 0 : max(0, $responseTime - $dateValue);
+        $responseDelay = max(0, $responseTime - $requestTime);
+        $correctedAgeValue = $ageValue + $responseDelay;
+
+        return max($apparentAge, $correctedAgeValue);
     }
 
     /**

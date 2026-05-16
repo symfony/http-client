@@ -119,6 +119,54 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('2', $response->getHeaders()['age'][0]);
     }
 
+    public function testItComputesAgeFromOldDateHeaderWhenNoAgeHeader()
+    {
+        $date = gmdate('D, d M Y H:i:s', time() - 60).' GMT';
+
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                    'Date' => $date,
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client->request('GET', 'http://example.com/foo-bar')->getContent();
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $age = (int) $response->getHeaders()['age'][0];
+
+        $this->assertGreaterThanOrEqual(60, $age);
+        $this->assertLessThan(70, $age);
+    }
+
+    public function testItIncludesIncomingAgeHeaderWhenServingFromCache()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                    'Age' => '10',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client->request('GET', 'http://example.com/foo-bar')->getContent();
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $age = (int) $response->getHeaders()['age'][0];
+
+        $this->assertGreaterThanOrEqual(12, $age);
+        $this->assertLessThan(20, $age);
+    }
+
     public function testItSupportsVaryHeader()
     {
         $mockClient = new MockHttpClient([
@@ -1467,6 +1515,78 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('foo', $response->getContent());
         $this->assertSame('3', $response->getHeaders()['age'][0]);
+    }
+
+    public function testOldDateWithShortMaxAgeIsImmediatelyStale()
+    {
+        $date = gmdate('D, d M Y H:i:s', time() - 60).' GMT';
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Date' => $date,
+                    'Cache-Control' => 'max-age=30',
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/date-max-age')->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/date-max-age')->getContent());
+    }
+
+    public function testOldDateWithExpiresUsesRemainingTtl()
+    {
+        $dateTimestamp = time() - 60;
+        $date = gmdate('D, d M Y H:i:s', $dateTimestamp).' GMT';
+        $expires = gmdate('D, d M Y H:i:s', $dateTimestamp + 300).' GMT';
+
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Date' => $date,
+                    'Expires' => $expires,
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client->request('GET', 'http://example.com/date-expires')->getContent();
+
+        sleep(245);
+
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/date-expires')->getContent());
+    }
+
+    public function testRevalidationUsesUpdatedMetadataImmediately()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => [
+                    'ETag' => '"abc123"',
+                    'Date' => gmdate('D, d M Y H:i:s', time() - 10).' GMT',
+                    'Cache-Control' => 'max-age=30',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-metadata')->getContent());
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/etag-metadata');
+        $this->assertSame('foo', $response->getContent());
+        $this->assertGreaterThanOrEqual(10, (int) $response->getHeaders()['age'][0]);
     }
 
     public function testGatewayTimeoutOnMustRevalidateFailure()
