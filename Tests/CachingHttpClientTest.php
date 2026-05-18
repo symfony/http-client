@@ -256,6 +256,7 @@ class CachingHttpClientTest extends TestCase
             new MockResponse('', [
                 'http_code' => 304,
                 'response_headers' => [
+                    'ETag: "abc"',
                     'Connection: X-Hop',
                     'X-Hop: new',
                     'Cache-Control: max-age=300',
@@ -1969,6 +1970,189 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://example.com/etag-traceable');
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testConditional304FromUserHeadersIsPassedThroughAndDoesNotFreshenCacheWhenValidatorsDoNotMatch()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=0'],
+            ]),
+            new MockResponse('', ['http_code' => 304]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/user-conditional-304');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/user-conditional-304', [
+            'headers' => ['If-None-Match' => '"user-etag"'],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+    }
+
+    public function testConditional304FromUserHeadersIsPassedThroughAndFreshensCacheWhenValidatorsMatch()
+    {
+        $requestCount = 0;
+        $mockClient = new MockHttpClient(static function () use (&$requestCount) {
+            ++$requestCount;
+
+            return match ($requestCount) {
+                1 => new MockResponse('cached', [
+                    'http_code' => 200,
+                    'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=0'],
+                ]),
+                2 => new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=60']]),
+                default => new MockResponse('should not be requested', ['http_code' => 500]),
+            };
+        });
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/matching-user-conditional-304');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/matching-user-conditional-304', [
+            'headers' => ['If-None-Match' => '"cache-etag"'],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/matching-user-conditional-304');
+        $this->assertSame('cached', $response->getContent());
+        $this->assertSame(2, $requestCount);
+    }
+
+    public function testConditional304FromCacheRevalidationIsPassedThroughWhenResponseValidatorsDoNotMatch()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=0'],
+            ]),
+            new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"other-etag"']]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/mismatching-response-validator-304');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/mismatching-response-validator-304');
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+    }
+
+    public function testRevalidationForwardsExpectedConditionalHeaders()
+    {
+        $requestCount = 0;
+        $mockClient = new MockHttpClient(function (string $method, string $url, array $options) use (&$requestCount) {
+            ++$requestCount;
+
+            if (1 === $requestCount) {
+                return new MockResponse('cached', [
+                    'http_code' => 200,
+                    'response_headers' => ['ETag' => '"cache-etag"', 'Last-Modified' => 'Wed, 21 Oct 2015 07:28:00 GMT', 'Cache-Control' => 'max-age=0'],
+                ]);
+            }
+
+            if (2 === $requestCount) {
+                $this->assertSame(['If-None-Match: "user-etag"'], $options['normalized_headers']['if-none-match'] ?? []);
+                $this->assertArrayNotHasKey('if-modified-since', $options['normalized_headers']);
+
+                return new MockResponse('', ['http_code' => 304]);
+            }
+
+            $this->assertSame(['If-None-Match: "cache-etag"'], $options['normalized_headers']['if-none-match'] ?? []);
+            $this->assertArrayHasKey('if-modified-since', $options['normalized_headers']);
+
+            return new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"cache-etag"']]);
+        });
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/conditional-headers');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/conditional-headers', [
+            'headers' => ['If-None-Match' => '"user-etag"'],
+        ]);
+        $this->assertSame(304, $response->getStatusCode());
+
+        $response = $client->request('GET', 'http://example.com/conditional-headers');
+        $this->assertSame(200, $response->getStatusCode());
+    }
+
+    public function test304StrongEtagDoesNotMatchWeakCachedEtag()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => 'W/"abc123"', 'Cache-Control' => 'max-age=0'],
+            ]),
+            new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"abc123"']]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/strong-vs-weak');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/strong-vs-weak');
+        $this->assertSame(304, $response->getStatusCode());
+    }
+
+    public function testFreshCachedResponseHonorsMatchingClientIfNoneMatch()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=300'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-conditional');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-conditional', [
+            'headers' => ['If-None-Match' => 'W/"cache-etag"'],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+    }
+
+    public function testFreshCachedResponseHonorsMatchingClientIfModifiedSince()
+    {
+        $lastModified = 'Wed, 21 Oct 2015 07:28:00 GMT';
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['Last-Modified' => $lastModified, 'Cache-Control' => 'max-age=300'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-modified-since');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-modified-since', [
+            'headers' => ['If-Modified-Since' => $lastModified],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
     }
 
     public function testStaleResponseWithTraceableClient()

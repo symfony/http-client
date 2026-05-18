@@ -197,21 +197,31 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
         $metadataKey = self::getMetadataKey($requestHash, $options['normalized_headers'], $varyFields);
         $cachedData = $this->cache->get($metadataKey, static fn ($item, &$save): array => ($save = false) ?: [], 0);
+        $hasClientConditionalValidator = isset($options['normalized_headers']['if-none-match']) || isset($options['normalized_headers']['if-modified-since']);
+        $sentCacheValidator = false;
 
         $freshness = null;
         if ($cachedData) {
             $freshness = $this->evaluateCacheFreshness($cachedData);
 
             if (Freshness::Fresh === $freshness) {
+                if ($hasClientConditionalValidator && self::clientValidatorMatchesCachedResponse($options['normalized_headers'], $cachedData)) {
+                    return self::createNotModifiedResponse($method, $url, $options, $cachedData['headers']);
+                }
+
                 return $this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey);
             }
 
-            if (isset($cachedData['headers']['etag'])) {
-                $options['headers']['If-None-Match'] = implode(', ', $cachedData['headers']['etag']);
-            }
+            if (!$hasClientConditionalValidator) {
+                if (isset($cachedData['headers']['etag'])) {
+                    $options['headers']['If-None-Match'] = implode(', ', $cachedData['headers']['etag']);
+                    $sentCacheValidator = true;
+                }
 
-            if (isset($cachedData['headers']['last-modified'][0])) {
-                $options['headers']['If-Modified-Since'] = $cachedData['headers']['last-modified'][0];
+                if (isset($cachedData['headers']['last-modified'][0])) {
+                    $options['headers']['If-Modified-Since'] = $cachedData['headers']['last-modified'][0];
+                    $sentCacheValidator = true;
+                }
             }
         }
 
@@ -230,6 +240,8 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             $url,
             $method,
             $options,
+            $hasClientConditionalValidator,
+            $sentCacheValidator,
         ): \Generator {
             static $attemptTag = null;
             static $firstChunkKey = null;
@@ -269,6 +281,16 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                 $attemptTag = self::generateChunkKey();
 
                 if (304 === $statusCode && null !== $freshness) {
+                    $shouldUpdateCachedMetadata = ($sentCacheValidator || $hasClientConditionalValidator) && self::notModifiedResponseMatchesCachedResponse($headers, $cachedData);
+
+                    if (!$shouldUpdateCachedMetadata) {
+                        $context->passthru();
+
+                        yield $chunk;
+
+                        return;
+                    }
+
                     $responseTime = time();
                     $requestTime = (int) ($context->getInfo('start_time') ?? $responseTime);
                     $correctedInitialAge = self::getCorrectedInitialAge($headers, $requestTime, $responseTime);
@@ -287,7 +309,10 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                     }, \INF);
 
                     $context->passthru();
-                    $context->replaceResponse($this->createResponseFromCache($updatedCachedData, $method, $url, $options, $metadataKey, $expiresAt));
+
+                    if (!$hasClientConditionalValidator) {
+                        $context->replaceResponse($this->createResponseFromCache($updatedCachedData, $method, $url, $options, $metadataKey, $expiresAt));
+                    }
 
                     return;
                 }
@@ -654,6 +679,105 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     }
 
     /**
+     * @param array<string, string[]>                 $headers
+     * @param array{headers: array<string, string[]>} $cachedData
+     */
+    private static function notModifiedResponseMatchesCachedResponse(array $headers, array $cachedData): bool
+    {
+        if (isset($headers['etag'])) {
+            $cachedEtags = $cachedData['headers']['etag'] ?? [];
+
+            foreach ($headers['etag'] as $etag) {
+                if (!self::isWeakEtag($etag)) {
+                    foreach ($cachedEtags as $cachedEtag) {
+                        if (!self::isWeakEtag($cachedEtag) && $etag === $cachedEtag) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+            }
+
+            foreach ($headers['etag'] as $etag) {
+                foreach ($cachedEtags as $cachedEtag) {
+                    if (self::stripWeakPrefix($etag) === self::stripWeakPrefix($cachedEtag)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        foreach ($headers['last-modified'] ?? [] as $lastModified) {
+            return \in_array($lastModified, $cachedData['headers']['last-modified'] ?? [], true);
+        }
+
+        return !isset($cachedData['headers']['etag']) && !isset($cachedData['headers']['last-modified']);
+    }
+
+    /**
+     * @param array<string, string[]>                 $requestHeaders
+     * @param array{headers: array<string, string[]>} $cachedData
+     */
+    private static function clientValidatorMatchesCachedResponse(array $requestHeaders, array $cachedData): bool
+    {
+        if (isset($requestHeaders['if-none-match'])) {
+            $cachedEtags = $cachedData['headers']['etag'] ?? [];
+
+            foreach ($requestHeaders['if-none-match'] as $ifNoneMatch) {
+                $ifNoneMatch = substr($ifNoneMatch, 15);
+
+                foreach (explode(',', $ifNoneMatch) as $etag) {
+                    $etag = trim($etag);
+
+                    if ('*' === $etag && [] !== $cachedEtags) {
+                        return true;
+                    }
+
+                    foreach ($cachedEtags as $cachedEtag) {
+                        if (self::stripWeakPrefix($etag) === self::stripWeakPrefix($cachedEtag)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        if (!isset($requestHeaders['if-modified-since'], $cachedData['headers']['last-modified'][0])) {
+            return false;
+        }
+
+        $lastModified = strtotime($cachedData['headers']['last-modified'][0]);
+        if (false === $lastModified) {
+            return false;
+        }
+
+        foreach ($requestHeaders['if-modified-since'] as $ifModifiedSince) {
+            $ifModifiedSince = substr($ifModifiedSince, 19);
+
+            if (false !== $modifiedSince = strtotime($ifModifiedSince)) {
+                return $lastModified <= $modifiedSince;
+            }
+        }
+
+        return false;
+    }
+
+    private static function stripWeakPrefix(string $etag): string
+    {
+        return str_starts_with($etag, 'W/') ? substr($etag, 2) : $etag;
+    }
+
+    private static function isWeakEtag(string $etag): bool
+    {
+        return str_starts_with($etag, 'W/');
+    }
+
+    /**
      * Evaluates the freshness of a cached response based on its headers and expiration time.
      *
      * This method determines the state of the cached response by analyzing the Cache-Control
@@ -1002,5 +1126,16 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     private static function createGatewayTimeoutResponse(string $method, string $url, array $options): MockResponse
     {
         return MockResponse::fromRequest($method, $url, $options, new MockResponse('', ['http_code' => 504]));
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     */
+    private static function createNotModifiedResponse(string $method, string $url, array $options, array $headers): MockResponse
+    {
+        return MockResponse::fromRequest($method, $url, $options, new MockResponse('', [
+            'http_code' => 304,
+            'response_headers' => array_diff_key($headers, self::EXCLUDED_HEADERS),
+        ]));
     }
 }
