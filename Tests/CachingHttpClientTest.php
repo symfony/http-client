@@ -1551,6 +1551,147 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('foo', $response->getContent());
     }
 
+    public function testRevalidationUsesUpdatedMetadataFrom304Response()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=60', 'X-Revalidated' => 'yes'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/etag-updated-metadata');
+        $this->assertSame('foo', $response->getContent());
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/etag-updated-metadata');
+        $this->assertSame('foo', $response->getContent());
+        $this->assertSame(['max-age=60'], $response->getHeaders()['cache-control']);
+        $this->assertSame(['yes'], $response->getHeaders()['x-revalidated']);
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/etag-updated-metadata');
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testRevalidationRetainsStoredFreshnessWhen304OmitsCacheDirectives()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=60'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-retain-max-age')->getContent());
+
+        sleep(61);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-retain-max-age')->getContent());
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-retain-max-age')->getContent());
+    }
+
+    public function test304UpdatedMetadataCanInvalidateCacheability()
+    {
+        foreach (['no-store', 'private', 'max-age=60'] as $cacheControl) {
+            $responseHeaders = ['ETag' => '"abc123"', 'Cache-Control' => $cacheControl];
+            if ('max-age=60' === $cacheControl) {
+                $responseHeaders['Set-Cookie'] = 'foo=bar';
+            }
+
+            $mockClient = new MockHttpClient([
+                new MockResponse('foo', [
+                    'http_code' => 200,
+                    'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1'],
+                ]),
+                new MockResponse('', [
+                    'http_code' => 304,
+                    'response_headers' => $responseHeaders,
+                ]),
+                new MockResponse('bar', [
+                    'http_code' => 200,
+                    'response_headers' => ['Cache-Control' => 'max-age=60'],
+                ]),
+            ]);
+
+            $client = new CachingHttpClient($mockClient, $this->cacheAdapter, sharedCache: true);
+
+            $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-invalidate-'.$cacheControl)->getContent());
+            sleep(2);
+
+            $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-invalidate-'.$cacheControl)->getContent());
+            $this->assertSame('bar', $client->request('GET', 'http://example.com/etag-invalidate-'.$cacheControl)->getContent());
+        }
+    }
+
+    public function test304UpdatedMetadataEvictsUncacheableResponseBeforeStaleFallback()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1, stale-if-error=60'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'no-store'],
+            ]),
+            new MockResponse('origin error', ['http_code' => 500]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-no-store-evicts')->getContent());
+        sleep(2);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-no-store-evicts')->getContent());
+
+        $response = $client->request('GET', 'http://example.com/etag-no-store-evicts');
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame('origin error', $response->getContent(false));
+    }
+
+    public function test304VaryChangePreventsReuseWithDifferentVaryHeader()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1', 'Vary' => 'Accept-Language'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"', 'Vary' => 'Accept-Encoding'],
+            ]),
+            new MockResponse('bar', [
+                'http_code' => 200,
+                'response_headers' => ['Cache-Control' => 'max-age=60', 'Vary' => 'Accept-Language'],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-vary-change', ['headers' => ['Accept-Language' => 'en']])->getContent());
+        sleep(2);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-vary-change', ['headers' => ['Accept-Language' => 'en']])->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/etag-vary-change', ['headers' => ['Accept-Language' => 'fr']])->getContent());
+    }
+
     public function testLastModifiedRevalidation()
     {
         $lastModified = 'Wed, 21 Oct 2015 07:28:00 GMT';

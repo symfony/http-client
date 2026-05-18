@@ -293,19 +293,41 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
                     $responseTime = time();
                     $requestTime = (int) ($context->getInfo('start_time') ?? $responseTime);
+                    if ($requestTime <= $cachedData['stored_at']) {
+                        $requestTime = $responseTime;
+                    }
                     $correctedInitialAge = self::getCorrectedInitialAge($headers, $requestTime, $responseTime);
-                    $maxAge = $this->determineMaxAge($headers, $cacheControl, $correctedInitialAge, $requestTime, $responseTime);
-                    $excludedHeaders = self::getExcludedHeaders($headers);
+                    $updatedHeaders = self::filterStorableHeaders(array_merge($cachedData['headers'], $headers), self::getExcludedHeaders($headers));
+                    $updatedCachedData = array_replace($cachedData, [
+                        'stored_at' => $responseTime,
+                        'initial_age' => $correctedInitialAge,
+                        'headers' => $updatedHeaders,
+                    ]);
 
-                    $updatedCachedData = $this->cache->get($metadataKey, static function (ItemInterface $item) use ($headers, $maxAge, $cachedData, $expiresAt, $fullUrlTag, $metadataKey, $responseTime, $correctedInitialAge, $excludedHeaders): array {
+                    $updatedCacheControl = self::parseCacheControlHeader($updatedCachedData['headers']['cache-control'] ?? []);
+                    $updatedCachedData['expires_at'] = self::calculateExpiresAt($this->determineMaxAge($updatedCachedData['headers'], $updatedCacheControl, $correctedInitialAge, $requestTime, $responseTime));
+
+                    $newVaryFields = $this->parseVaryFields($updatedCachedData['headers']['vary'] ?? []);
+                    $updatedMetadataIsCacheable = !\in_array('*', $newVaryFields, true)
+                        && $varyFields === $newVaryFields
+                        && $this->isServerResponseCacheable($cachedData['status_code'], $options['normalized_headers'], $updatedCachedData['headers'], $updatedCacheControl);
+
+                    if (!$updatedMetadataIsCacheable) {
+                        $this->cache->delete($metadataKey);
+
+                        $context->passthru();
+
+                        if (!$hasClientConditionalValidator) {
+                            $context->replaceResponse($this->createResponseFromCache($updatedCachedData, $method, $url, $options, $metadataKey, $expiresAt));
+                        }
+
+                        return;
+                    }
+
+                    $updatedCachedData = $this->cache->get($metadataKey, static function (ItemInterface $item) use ($updatedCachedData, $expiresAt, $fullUrlTag, $metadataKey): array {
                         $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
 
-                        $cachedData['expires_at'] = self::calculateExpiresAt($maxAge);
-                        $cachedData['stored_at'] = $responseTime;
-                        $cachedData['initial_age'] = $correctedInitialAge;
-                        $cachedData['headers'] = array_merge(array_diff_key($cachedData['headers'], $excludedHeaders), self::filterStorableHeaders($headers, $excludedHeaders));
-
-                        return $cachedData;
+                        return $updatedCachedData;
                     }, \INF);
 
                     $context->passthru();
@@ -344,16 +366,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
                 }
 
                 // recomputing vary fields in case it changed or for first request
-                $newVaryFields = [];
-                foreach ($headers['vary'] ?? [] as $vary) {
-                    foreach (explode(',', $vary) as $field) {
-                        $field = strtolower(trim($field));
-                        if ('cookie' === $field ? $this->sharedCache : !preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/D', $field)) {
-                            $field = '*';
-                        }
-                        $newVaryFields[] = $field;
-                    }
-                }
+                $newVaryFields = $this->parseVaryFields($headers['vary'] ?? []);
 
                 if (\in_array('*', $newVaryFields, true)) {
                     $context->passthru();
@@ -959,6 +972,29 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         }
 
         return time() + $maxAge;
+    }
+
+    /**
+     * @param string[] $varyHeaders
+     *
+     * @return string[]
+     */
+    private function parseVaryFields(array $varyHeaders): array
+    {
+        $varyFields = [];
+        foreach ($varyHeaders as $vary) {
+            foreach (explode(',', $vary) as $field) {
+                $field = strtolower(trim($field));
+                if ('cookie' === $field ? $this->sharedCache : !preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/D', $field)) {
+                    $field = '*';
+                }
+                $varyFields[] = $field;
+            }
+        }
+
+        sort($varyFields);
+
+        return $varyFields;
     }
 
     /**
