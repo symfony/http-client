@@ -631,7 +631,13 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
         if (
             isset($parseCacheControlHeader['must-revalidate'])
-            || ($this->sharedCache && isset($parseCacheControlHeader['proxy-revalidate']))
+            || (
+                $this->sharedCache
+                && (
+                    isset($parseCacheControlHeader['proxy-revalidate'])
+                    || self::hasValidSharedMaxAge($parseCacheControlHeader)
+                )
+            )
         ) {
             return Freshness::MustRevalidate;
         }
@@ -668,7 +674,9 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         $age = self::getCurrentAge($headers);
 
         if ($this->sharedCache && isset($cacheControl['s-maxage'])) {
-            $sharedMaxAge = (int) $cacheControl['s-maxage'];
+            if (null === $sharedMaxAge = self::parseDeltaSeconds($cacheControl['s-maxage'])) {
+                return null;
+            }
 
             return max(0, $sharedMaxAge - $age);
         }
@@ -760,7 +768,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
 
         if ($this->sharedCache) {
             if (
-                !isset($cacheControl['public']) && !isset($cacheControl['s-maxage']) && !isset($cacheControl['must-revalidate'])
+                !isset($cacheControl['public']) && !self::hasValidSharedMaxAge($cacheControl) && !isset($cacheControl['must-revalidate'])
                 && isset($requestHeaders['authorization'])
             ) {
                 return false;
@@ -796,8 +804,16 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     private function hasExplicitExpiration(array $headers, array $cacheControl): bool
     {
         return isset($headers['expires'])
-            || ($this->sharedCache && isset($cacheControl['s-maxage']))
+            || ($this->sharedCache && self::hasValidSharedMaxAge($cacheControl))
             || null !== self::parseDeltaSeconds($cacheControl['max-age'] ?? null);
+    }
+
+    /**
+     * @param array<string, string|true> $cacheControl
+     */
+    private static function hasValidSharedMaxAge(array $cacheControl): bool
+    {
+        return null !== self::parseDeltaSeconds($cacheControl['s-maxage'] ?? null);
     }
 
     /**
