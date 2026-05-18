@@ -563,14 +563,47 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             foreach (explode(',', $line) as $directive) {
                 if (str_contains($directive, '=')) {
                     [$name, $value] = explode('=', $directive, 2);
-                    $parsed[trim($name)] = trim($value);
+                    $normalizedName = strtolower(trim($name));
+                    $normalizedValue = self::unquoteCacheControlValue(trim($value));
                 } else {
-                    $parsed[trim($directive)] = true;
+                    $normalizedName = strtolower(trim($directive));
+                    $normalizedValue = true;
                 }
+
+                if ('' === $normalizedName) {
+                    continue;
+                }
+
+                if (\array_key_exists($normalizedName, $parsed)) {
+                    // Duplicate directive values are ambiguous; make value-based checks fail closed.
+                    $parsed[$normalizedName] = '';
+
+                    continue;
+                }
+
+                $parsed[$normalizedName] = $normalizedValue;
             }
         }
 
         return $parsed;
+    }
+
+    private static function unquoteCacheControlValue(string $value): string
+    {
+        if (2 <= \strlen($value) && '"' === $value[0] && '"' === $value[-1]) {
+            return substr($value, 1, -1);
+        }
+
+        return $value;
+    }
+
+    private static function parseDeltaSeconds(string|true|null $value): ?int
+    {
+        if (!\is_string($value) || '' === $value || !ctype_digit($value)) {
+            return null;
+        }
+
+        return (int) $value;
     }
 
     /**
@@ -603,7 +636,10 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
             return Freshness::MustRevalidate;
         }
 
-        if (isset($parseCacheControlHeader['stale-if-error']) && ($now - $expires) <= (int) $parseCacheControlHeader['stale-if-error']) {
+        if (
+            null !== ($staleIfError = self::parseDeltaSeconds($parseCacheControlHeader['stale-if-error'] ?? null))
+            && ($now - $expires) <= $staleIfError
+        ) {
             return Freshness::StaleButUsable;
         }
 
@@ -638,7 +674,9 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
         }
 
         if (isset($cacheControl['max-age'])) {
-            $maxAge = (int) $cacheControl['max-age'];
+            if (null === $maxAge = self::parseDeltaSeconds($cacheControl['max-age'])) {
+                return null;
+            }
 
             return max(0, $maxAge - $age);
         }
@@ -759,7 +797,7 @@ class CachingHttpClient implements HttpClientInterface, ResetInterface
     {
         return isset($headers['expires'])
             || ($this->sharedCache && isset($cacheControl['s-maxage']))
-            || isset($cacheControl['max-age']);
+            || null !== self::parseDeltaSeconds($cacheControl['max-age'] ?? null);
     }
 
     /**
