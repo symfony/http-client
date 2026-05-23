@@ -119,6 +119,54 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('2', $response->getHeaders()['age'][0]);
     }
 
+    public function testItComputesAgeFromOldDateHeaderWhenNoAgeHeader()
+    {
+        $date = gmdate('D, d M Y H:i:s', time() - 60).' GMT';
+
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                    'Date' => $date,
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client->request('GET', 'http://example.com/foo-bar')->getContent();
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $age = (int) $response->getHeaders()['age'][0];
+
+        $this->assertGreaterThanOrEqual(60, $age);
+        $this->assertLessThan(70, $age);
+    }
+
+    public function testItIncludesIncomingAgeHeaderWhenServingFromCache()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                    'Age' => '10',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client->request('GET', 'http://example.com/foo-bar')->getContent();
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $age = (int) $response->getHeaders()['age'][0];
+
+        $this->assertGreaterThanOrEqual(12, $age);
+        $this->assertLessThan(20, $age);
+    }
+
     public function testItSupportsVaryHeader()
     {
         $mockClient = new MockHttpClient([
@@ -151,6 +199,84 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Foo' => 'bar', 'Bar' => 'foo']]);
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testItDoesNotStoreConnectionNominatedHopByHopHeaders()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control: max-age=300',
+                    'Connection: X-Hop-By-Hop',
+                    'Keep-Alive: timeout=5',
+                    'TE: trailers',
+                    'Trailer: X-Trailer',
+                    'Transfer-Encoding: chunked',
+                    'Upgrade: websocket',
+                    'X-Hop-By-Hop: secret',
+                    'X-Keep: persisted',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame('secret', $response->getHeaders()['x-hop-by-hop'][0]);
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $headers = $response->getHeaders();
+
+        $this->assertArrayNotHasKey('x-hop-by-hop', $headers);
+        $this->assertArrayNotHasKey('keep-alive', $headers);
+        $this->assertArrayNotHasKey('te', $headers);
+        $this->assertArrayNotHasKey('trailer', $headers);
+        $this->assertArrayNotHasKey('transfer-encoding', $headers);
+        $this->assertArrayNotHasKey('upgrade', $headers);
+        $this->assertSame('persisted', $headers['x-keep'][0]);
+    }
+
+    public function testItDoesNotKeepConnectionNominatedHeadersAfter304Revalidation()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'ETag: "abc"',
+                    'Cache-Control: max-age=0',
+                    'X-Hop: old',
+                ],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => [
+                    'ETag: "abc"',
+                    'Connection: X-Hop',
+                    'X-Hop: new',
+                    'Cache-Control: max-age=300',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter, sharedCache: false);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame('old', $response->getHeaders()['x-hop'][0]);
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertArrayNotHasKey('x-hop', $response->getHeaders());
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertArrayNotHasKey('x-hop', $response->getHeaders());
+        $this->assertSame('foo', $response->getContent());
     }
 
     public function testItDoesntServeAStaleResponse()
@@ -276,6 +402,85 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('foo', $response->getContent(false));
     }
 
+    public function testSharedCacheDoesNotServeStaleResponseOnErrorWhenExpiredByMixedCaseSMaxAge()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 404,
+                'response_headers' => [
+                    'Cache-Control' => 'S-MaxAge=1, max-age=100, stale-if-error=5',
+                ],
+            ]),
+            new MockResponse('Internal Server Error', ['http_code' => 500]),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent(false));
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(504, $response->getStatusCode());
+    }
+
+    public function testSharedCacheServesStaleResponseOnErrorWithMalformedSMaxAgeAndStaleIfError()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 404,
+                'response_headers' => [
+                    'Cache-Control' => 's-maxage=abc, stale-if-error=9999999999',
+                ],
+            ]),
+            new MockResponse('Internal Server Error', ['http_code' => 500]),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-malformed-s-maxage-stale-if-error');
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-malformed-s-maxage-stale-if-error');
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent(false));
+    }
+
+    public function testSharedCacheServesStaleResponseOnErrorWithDuplicateSMaxAgeAndStaleIfError()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 404,
+                'response_headers' => [
+                    'Cache-Control' => 's-maxage=1, s-maxage=2, stale-if-error=9999999999',
+                ],
+            ]),
+            new MockResponse('Internal Server Error', ['http_code' => 500]),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-duplicate-s-maxage-stale-if-error');
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-duplicate-s-maxage-stale-if-error');
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent(false));
+    }
+
     public function testPrivateCacheWithSharedCacheFalse()
     {
         $responses = [
@@ -310,7 +515,7 @@ class CachingHttpClientTest extends TestCase
             new MockResponse('foo', [
                 'http_code' => 200,
                 'response_headers' => [
-                    'Cache-Control' => 'no-store',
+                    'Cache-Control' => 'NO-STORE',
                 ],
             ]),
             new MockResponse('bar'),
@@ -328,6 +533,297 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://example.com/foo-bar');
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testItDoesntStoreAResponseWithUppercaseNoStoreDirectiveEvenWithMaxAge()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300, NO-STORE',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-no-store');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-no-store');
+        $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testItRevalidatesFreshResponseWhenRequestNoCacheDirectiveIsPresent()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+            new MockResponse('baz', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'no-cache']])->getContent());
+    }
+
+    public function testItRevalidatesFreshResponseWhenRequestMaxAgeZeroDirectiveIsPresent()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'max-age=0']])->getContent());
+    }
+
+    public function testRequestNoStoreBypassesLookupAndStorage()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('bar', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'no-store']])->getContent());
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+    }
+
+    public function testOnlyIfCachedReturnsGatewayTimeoutOnCacheMiss()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'only-if-cached']]);
+        $this->assertSame(504, $response->getStatusCode());
+    }
+
+    public function testOnlyIfCachedReturnsGatewayTimeoutWhenCacheIsBypassed()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'only-if-cached', 'Range' => 'bytes=0-100']]);
+
+        $this->assertSame(504, $response->getStatusCode());
+        $this->assertSame(0, $mockClient->getRequestsCount());
+    }
+
+    public function testOnlyIfCachedReturnsFreshCachedResponse()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('should not be served', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'only-if-cached']]);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testOnlyIfCachedReturnsGatewayTimeoutOnStaleCachedResponse()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=1',
+                ],
+            ]),
+            new MockResponse('should not be served', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'only-if-cached']]);
+        $this->assertSame(504, $response->getStatusCode());
+    }
+
+    public function testOnlyIfCachedWithNoCacheReturnsGatewayTimeout()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('should not be served', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'only-if-cached, no-cache']]);
+
+        $this->assertSame(504, $response->getStatusCode());
+    }
+
+    public function testRequestMaxAgeRejectsTooOldCachedResponse()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        sleep(2);
+
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'max-age=1']])->getContent());
+    }
+
+    public function testRequestNoCachePreventsStaleIfErrorFallback()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=1, stale-if-error=60',
+                ],
+            ]),
+            new MockResponse('error', ['http_code' => 500]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'no-cache']]);
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame('error', $response->getContent(false));
+    }
+
+    public function testRequestMaxAgePreventsStaleIfErrorFallbackWhenCachedResponseIsTooOld()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300, stale-if-error=60',
+                ],
+            ]),
+            new MockResponse('error', ['http_code' => 500]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'max-age=1']]);
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame('error', $response->getContent(false));
+    }
+
+    public function testMalformedRequestMaxAgeIsIgnored()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('should not be served', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'max-age=1x']])->getContent());
+    }
+
+    public function testRequestCacheControlParsesQuotedMixedCaseMaxAgeDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'MaX-aGe="0"']])->getContent());
+    }
+
+    public function testRequestCacheControlParsesMixedCaseNoCacheDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=300',
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/foo-bar')->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/foo-bar', ['headers' => ['Cache-Control' => 'NO-CACHE']])->getContent());
     }
 
     public function testASharedCacheDoesntStoreAResponseFromRequestWithAuthorization()
@@ -420,6 +916,304 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://example.com/foo-bar');
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testASharedCacheDoesntStoreAResponseWithMalformedSMaxAgeDirectiveFromRequestWithAuthorization()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 's-maxage=abc',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+            ['headers' => ['Authorization' => 'foo']],
+            sharedCache: true,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-malformed-s-maxage');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-malformed-s-maxage');
+        $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testItStoresAResponseWithUppercaseMaxAgeDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'MAX-AGE=300',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testItStoresAResponseWithQuotedUppercaseMaxAgeDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'MAX-AGE="300"',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-quoted-max-age');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-quoted-max-age');
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testItStoresAResponseWithEmptyCacheControlDirectives()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => ',,, max-age=300,,',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-empty-cache-control-directives');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-empty-cache-control-directives');
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testItDoesntStoreAResponseWithMalformedMaxAgeDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=3x0',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-malformed-max-age');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-malformed-max-age');
+        $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testItDoesntStoreAResponseWithQuotedCommaInMaxAgeDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age="3,0"',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-quoted-comma-max-age');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-quoted-comma-max-age');
+        $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testCacheControlDuplicateDirectiveInvalidatesFreshness()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=0, MAX-AGE=300',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-duplicate-max-age');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-duplicate-max-age');
+        $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testCacheControlDuplicateDirectiveAcrossHeaderLinesInvalidatesFreshness()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => ['max-age=0', 'MAX-AGE=300'],
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-duplicate-max-age-header-lines');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-duplicate-max-age-header-lines');
+        $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testASharedCacheStoresAResponseWithUppercasePublicDirectiveFromRequestWithAuthorization()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'PUBLIC, max-age=300',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+            ['headers' => ['Authorization' => 'foo']],
+            sharedCache: true,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-public');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-public');
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testASharedCacheStoresAResponseWithUppercaseSMaxAgeDirectiveFromRequestWithAuthorization()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'S-MAXAGE=300',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+            ['headers' => ['Authorization' => 'foo']],
+            sharedCache: true,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-s-maxage');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-s-maxage');
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testASharedCacheDoesntStoreAResponseWithUppercasePrivateDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'PRIVATE, max-age=300',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+            sharedCache: true,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-private');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-private');
+        $this->assertSame('bar', $response->getContent());
+    }
+
+    public function testASharedCacheDoesntStoreAResponseWithUppercaseNoStoreDirective()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Cache-Control' => 'NO-STORE, max-age=300',
+                ],
+            ]),
+            new MockResponse('bar'),
+        ]);
+
+        $client = new CachingHttpClient(
+            $mockClient,
+            $this->cacheAdapter,
+            sharedCache: true,
+        );
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-no-store-shared');
+        $this->assertSame('foo', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/foo-bar-uppercase-no-store-shared');
+        $this->assertSame('bar', $response->getContent());
     }
 
     public function testASharedCacheDoesntStoreAResponseWithPrivateDirective()
@@ -752,6 +1546,46 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('chunk1chunk2chunk3', $content);
     }
 
+    public function testItCachesHeuristicallyCacheableStatuses()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('method not allowed', ['http_code' => 405, 'response_headers' => ['Last-Modified' => 'Wed, 21 Oct 2015 07:28:00 GMT']]),
+            new MockResponse('uri too long', ['http_code' => 414, 'response_headers' => ['Last-Modified' => 'Wed, 21 Oct 2015 07:28:00 GMT']]),
+            new MockResponse('not implemented', ['http_code' => 501, 'response_headers' => ['Last-Modified' => 'Wed, 21 Oct 2015 07:28:00 GMT']]),
+            new MockResponse('should not be served'),
+            new MockResponse('should not be served'),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('method not allowed', $client->request('GET', 'http://example.com/405')->getContent(false));
+        $this->assertSame('uri too long', $client->request('GET', 'http://example.com/414')->getContent(false));
+        $this->assertSame('not implemented', $client->request('GET', 'http://example.com/501')->getContent(false));
+
+        $this->assertSame('method not allowed', $client->request('GET', 'http://example.com/405')->getContent(false));
+        $this->assertSame('uri too long', $client->request('GET', 'http://example.com/414')->getContent(false));
+        $this->assertSame('not implemented', $client->request('GET', 'http://example.com/501')->getContent(false));
+    }
+
+    public function testItStoresResponsesWithExplicitFreshnessEvenForOtherStatuses()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('legal reasons', [
+                'http_code' => 451,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=60',
+                ],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('legal reasons', $client->request('GET', 'http://example.com/451')->getContent(false));
+        $this->assertSame('legal reasons', $client->request('GET', 'http://example.com/451')->getContent(false));
+    }
+
     public function testConditionalCacheableStatusCodeWithoutExpiration()
     {
         $mockClient = new MockHttpClient([
@@ -791,6 +1625,176 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame('redirected', $response->getContent(false));
     }
 
+    public function testHeuristicDefaultCacheableStatusCode()
+    {
+        $lastModified = gmdate('D, d M Y H:i:s', time() - 1000).' GMT';
+        $mockClient = new MockHttpClient([
+            new MockResponse('permanent redirect', [
+                'http_code' => 308,
+                'response_headers' => [
+                    'Last-Modified' => $lastModified,
+                ],
+            ]),
+            new MockResponse('should not be served', ['http_code' => 308]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/redirect-308');
+        $this->assertSame(308, $response->getStatusCode());
+        $this->assertSame('permanent redirect', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/redirect-308');
+        $this->assertSame(308, $response->getStatusCode());
+        $this->assertSame('permanent redirect', $response->getContent(false));
+    }
+
+    public function testExplicitFreshnessStatusCode206IsNotStored()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('partial response one', [
+                'http_code' => 206,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=60',
+                ],
+            ]),
+            new MockResponse('partial response two', [
+                'http_code' => 206,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=60',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/partial');
+        $this->assertSame(206, $response->getStatusCode());
+        $this->assertSame('partial response one', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/partial');
+        $this->assertSame(206, $response->getStatusCode());
+        $this->assertSame('partial response two', $response->getContent(false));
+    }
+
+    public function testExplicitFreshnessStandaloneStatusCode304IsNotStored()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=60',
+                ],
+            ]),
+            new MockResponse('fresh payload', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/not-modified');
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/not-modified');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('fresh payload', $response->getContent(false));
+    }
+
+    public function testExplicitFreshnessInformationalStatusCodeIsNotStored()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('', [
+                'http_code' => 103,
+                'response_headers' => [
+                    'Cache-Control' => 'max-age=60',
+                ],
+            ]),
+            new MockResponse('fresh payload', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/early-hints');
+        $this->assertSame(103, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/early-hints');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('fresh payload', $response->getContent(false));
+    }
+
+    public function testInvalidExpiresDoesNotProvideExplicitFreshness()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('invalid expires', [
+                'http_code' => 302,
+                'response_headers' => [
+                    'Expires' => 'not-a-date',
+                ],
+            ]),
+            new MockResponse('fresh redirect', ['http_code' => 302]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/invalid-expires');
+        $this->assertSame(302, $response->getStatusCode());
+        $this->assertSame('invalid expires', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/invalid-expires');
+        $this->assertSame(302, $response->getStatusCode());
+        $this->assertSame('fresh redirect', $response->getContent(false));
+    }
+
+    public function testPublicNonDefaultStatusCodeUsesHeuristicFreshness()
+    {
+        $lastModified = gmdate('D, d M Y H:i:s', time() - 1000).' GMT';
+        $mockClient = new MockHttpClient([
+            new MockResponse('created once', [
+                'http_code' => 201,
+                'response_headers' => [
+                    'Cache-Control' => 'public',
+                    'Last-Modified' => $lastModified,
+                ],
+            ]),
+            new MockResponse('should not be served', ['http_code' => 201]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/created');
+        $this->assertSame(201, $response->getStatusCode());
+        $this->assertSame('created once', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/created');
+        $this->assertSame(201, $response->getStatusCode());
+        $this->assertSame('created once', $response->getContent(false));
+    }
+
+    public function testNonDefaultStatusCodeWithoutPublicDirectiveDoesNotUseHeuristicFreshness()
+    {
+        $lastModified = gmdate('D, d M Y H:i:s', time() - 1000).' GMT';
+        $mockClient = new MockHttpClient([
+            new MockResponse('created once', [
+                'http_code' => 201,
+                'response_headers' => [
+                    'Last-Modified' => $lastModified,
+                ],
+            ]),
+            new MockResponse('created twice', ['http_code' => 201]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/created');
+        $this->assertSame(201, $response->getStatusCode());
+        $this->assertSame('created once', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/created');
+        $this->assertSame(201, $response->getStatusCode());
+        $this->assertSame('created twice', $response->getContent(false));
+    }
+
     public function testETagRevalidation()
     {
         $mockClient = new MockHttpClient([
@@ -812,6 +1816,147 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://example.com/etag');
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testRevalidationUsesUpdatedMetadataFrom304Response()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=60', 'X-Revalidated' => 'yes'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/etag-updated-metadata');
+        $this->assertSame('foo', $response->getContent());
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/etag-updated-metadata');
+        $this->assertSame('foo', $response->getContent());
+        $this->assertSame(['max-age=60'], $response->getHeaders()['cache-control']);
+        $this->assertSame(['yes'], $response->getHeaders()['x-revalidated']);
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/etag-updated-metadata');
+        $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testRevalidationRetainsStoredFreshnessWhen304OmitsCacheDirectives()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=60'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-retain-max-age')->getContent());
+
+        sleep(61);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-retain-max-age')->getContent());
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-retain-max-age')->getContent());
+    }
+
+    public function test304UpdatedMetadataCanInvalidateCacheability()
+    {
+        foreach (['no-store', 'private', 'max-age=60'] as $cacheControl) {
+            $responseHeaders = ['ETag' => '"abc123"', 'Cache-Control' => $cacheControl];
+            if ('max-age=60' === $cacheControl) {
+                $responseHeaders['Set-Cookie'] = 'foo=bar';
+            }
+
+            $mockClient = new MockHttpClient([
+                new MockResponse('foo', [
+                    'http_code' => 200,
+                    'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1'],
+                ]),
+                new MockResponse('', [
+                    'http_code' => 304,
+                    'response_headers' => $responseHeaders,
+                ]),
+                new MockResponse('bar', [
+                    'http_code' => 200,
+                    'response_headers' => ['Cache-Control' => 'max-age=60'],
+                ]),
+            ]);
+
+            $client = new CachingHttpClient($mockClient, $this->cacheAdapter, sharedCache: true);
+
+            $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-invalidate-'.$cacheControl)->getContent());
+            sleep(2);
+
+            $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-invalidate-'.$cacheControl)->getContent());
+            $this->assertSame('bar', $client->request('GET', 'http://example.com/etag-invalidate-'.$cacheControl)->getContent());
+        }
+    }
+
+    public function test304UpdatedMetadataEvictsUncacheableResponseBeforeStaleFallback()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1, stale-if-error=60'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'no-store'],
+            ]),
+            new MockResponse('origin error', ['http_code' => 500]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-no-store-evicts')->getContent());
+        sleep(2);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-no-store-evicts')->getContent());
+
+        $response = $client->request('GET', 'http://example.com/etag-no-store-evicts');
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame('origin error', $response->getContent(false));
+    }
+
+    public function test304VaryChangePreventsReuseWithDifferentVaryHeader()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1', 'Vary' => 'Accept-Language'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => ['ETag' => '"abc123"', 'Vary' => 'Accept-Encoding'],
+            ]),
+            new MockResponse('bar', [
+                'http_code' => 200,
+                'response_headers' => ['Cache-Control' => 'max-age=60', 'Vary' => 'Accept-Language'],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-vary-change', ['headers' => ['Accept-Language' => 'en']])->getContent());
+        sleep(2);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-vary-change', ['headers' => ['Accept-Language' => 'en']])->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/etag-vary-change', ['headers' => ['Accept-Language' => 'fr']])->getContent());
     }
 
     public function testLastModifiedRevalidation()
@@ -856,6 +2001,78 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('foo', $response->getContent());
         $this->assertSame('3', $response->getHeaders()['age'][0]);
+    }
+
+    public function testOldDateWithShortMaxAgeIsImmediatelyStale()
+    {
+        $date = gmdate('D, d M Y H:i:s', time() - 60).' GMT';
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Date' => $date,
+                    'Cache-Control' => 'max-age=30',
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/date-max-age')->getContent());
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/date-max-age')->getContent());
+    }
+
+    public function testOldDateWithExpiresUsesRemainingTtl()
+    {
+        $dateTimestamp = time() - 60;
+        $date = gmdate('D, d M Y H:i:s', $dateTimestamp).' GMT';
+        $expires = gmdate('D, d M Y H:i:s', $dateTimestamp + 300).' GMT';
+
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => [
+                    'Date' => $date,
+                    'Expires' => $expires,
+                ],
+            ]),
+            new MockResponse('bar', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $client->request('GET', 'http://example.com/date-expires')->getContent();
+
+        sleep(245);
+
+        $this->assertSame('bar', $client->request('GET', 'http://example.com/date-expires')->getContent());
+    }
+
+    public function testRevalidationUsesUpdatedMetadataImmediately()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('foo', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"abc123"', 'Cache-Control' => 'max-age=1'],
+            ]),
+            new MockResponse('', [
+                'http_code' => 304,
+                'response_headers' => [
+                    'ETag' => '"abc123"',
+                    'Date' => gmdate('D, d M Y H:i:s', time() - 10).' GMT',
+                    'Cache-Control' => 'max-age=30',
+                ],
+            ]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+        $this->assertSame('foo', $client->request('GET', 'http://example.com/etag-metadata')->getContent());
+
+        sleep(2);
+
+        $response = $client->request('GET', 'http://example.com/etag-metadata');
+        $this->assertSame('foo', $response->getContent());
+        $this->assertGreaterThanOrEqual(10, (int) $response->getHeaders()['age'][0]);
     }
 
     public function testGatewayTimeoutOnMustRevalidateFailure()
@@ -1016,13 +2233,63 @@ class CachingHttpClientTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('initial get', $response->getContent());
 
-        // Unsafe POST with body (bypasses cache but invalidates on success)
-        $client->request('POST', 'http://example.com/unsafe-test', ['body' => 'invalidate']);
+        // Unsafe POST with body (bypasses cache but invalidates on successful responses)
+        $response = $client->request('POST', 'http://example.com/unsafe-test', ['body' => 'invalidate']);
+        $this->assertSame(204, $response->getStatusCode());
+        $this->assertSame('', $response->getContent());
 
         // Next GET should miss cache and fetch new
         $response = $client->request('GET', 'http://example.com/unsafe-test');
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('after invalidate', $response->getContent());
+    }
+
+    public function testUnknownMethodInvalidationInBypassFlow()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('initial get', ['http_code' => 200, 'response_headers' => ['Cache-Control' => 'max-age=300']]),
+            new MockResponse('', ['http_code' => 204]),
+            new MockResponse('after invalidate', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/unknown-method-test');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('initial get', $response->getContent());
+
+        // Deliberately unknown methods are treated as unsafe and must invalidate cache entries on successful responses.
+        $response = $client->request('FOO', 'http://example.com/unknown-method-test', ['body' => 'invalidate']);
+        $this->assertSame(204, $response->getStatusCode());
+        $this->assertSame('', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/unknown-method-test');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('after invalidate', $response->getContent());
+    }
+
+    public function testNoInvalidationOnInformationalResponseInBypassFlow()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('initial get', ['http_code' => 200, 'response_headers' => ['Cache-Control' => 'max-age=300']]),
+            new MockResponse('', ['http_code' => 103]),
+            new MockResponse('should not be fetched', ['http_code' => 200]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/no-invalidate-1xx-test');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('initial get', $response->getContent());
+
+        $response = $client->request('FOO', 'http://example.com/no-invalidate-1xx-test', ['body' => 'do not invalidate']);
+        $this->assertSame(103, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+
+        // Informational response must not invalidate.
+        $response = $client->request('GET', 'http://example.com/no-invalidate-1xx-test');
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('initial get', $response->getContent());
     }
 
     public function testNoInvalidationOnErrorInBypassFlow()
@@ -1111,6 +2378,189 @@ class CachingHttpClientTest extends TestCase
         $response = $client->request('GET', 'http://example.com/etag-traceable');
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('foo', $response->getContent());
+    }
+
+    public function testConditional304FromUserHeadersIsPassedThroughAndDoesNotFreshenCacheWhenValidatorsDoNotMatch()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=0'],
+            ]),
+            new MockResponse('', ['http_code' => 304]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/user-conditional-304');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/user-conditional-304', [
+            'headers' => ['If-None-Match' => '"user-etag"'],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+    }
+
+    public function testConditional304FromUserHeadersIsPassedThroughAndFreshensCacheWhenValidatorsMatch()
+    {
+        $requestCount = 0;
+        $mockClient = new MockHttpClient(static function () use (&$requestCount) {
+            ++$requestCount;
+
+            return match ($requestCount) {
+                1 => new MockResponse('cached', [
+                    'http_code' => 200,
+                    'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=0'],
+                ]),
+                2 => new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=60']]),
+                default => new MockResponse('should not be requested', ['http_code' => 500]),
+            };
+        });
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/matching-user-conditional-304');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/matching-user-conditional-304', [
+            'headers' => ['If-None-Match' => '"cache-etag"'],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+
+        $response = $client->request('GET', 'http://example.com/matching-user-conditional-304');
+        $this->assertSame('cached', $response->getContent());
+        $this->assertSame(2, $requestCount);
+    }
+
+    public function testConditional304FromCacheRevalidationIsPassedThroughWhenResponseValidatorsDoNotMatch()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=0'],
+            ]),
+            new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"other-etag"']]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/mismatching-response-validator-304');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/mismatching-response-validator-304');
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+    }
+
+    public function testRevalidationForwardsExpectedConditionalHeaders()
+    {
+        $requestCount = 0;
+        $mockClient = new MockHttpClient(function (string $method, string $url, array $options) use (&$requestCount) {
+            ++$requestCount;
+
+            if (1 === $requestCount) {
+                return new MockResponse('cached', [
+                    'http_code' => 200,
+                    'response_headers' => ['ETag' => '"cache-etag"', 'Last-Modified' => 'Wed, 21 Oct 2015 07:28:00 GMT', 'Cache-Control' => 'max-age=0'],
+                ]);
+            }
+
+            if (2 === $requestCount) {
+                $this->assertSame(['If-None-Match: "user-etag"'], $options['normalized_headers']['if-none-match'] ?? []);
+                $this->assertArrayNotHasKey('if-modified-since', $options['normalized_headers']);
+
+                return new MockResponse('', ['http_code' => 304]);
+            }
+
+            $this->assertSame(['If-None-Match: "cache-etag"'], $options['normalized_headers']['if-none-match'] ?? []);
+            $this->assertArrayHasKey('if-modified-since', $options['normalized_headers']);
+
+            return new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"cache-etag"']]);
+        });
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/conditional-headers');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/conditional-headers', [
+            'headers' => ['If-None-Match' => '"user-etag"'],
+        ]);
+        $this->assertSame(304, $response->getStatusCode());
+
+        $response = $client->request('GET', 'http://example.com/conditional-headers');
+        $this->assertSame(200, $response->getStatusCode());
+    }
+
+    public function test304StrongEtagDoesNotMatchWeakCachedEtag()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => 'W/"abc123"', 'Cache-Control' => 'max-age=0'],
+            ]),
+            new MockResponse('', ['http_code' => 304, 'response_headers' => ['ETag' => '"abc123"']]),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/strong-vs-weak');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/strong-vs-weak');
+        $this->assertSame(304, $response->getStatusCode());
+    }
+
+    public function testFreshCachedResponseHonorsMatchingClientIfNoneMatch()
+    {
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['ETag' => '"cache-etag"', 'Cache-Control' => 'max-age=300'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-conditional');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-conditional', [
+            'headers' => ['If-None-Match' => 'W/"cache-etag"'],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
+    }
+
+    public function testFreshCachedResponseHonorsMatchingClientIfModifiedSince()
+    {
+        $lastModified = 'Wed, 21 Oct 2015 07:28:00 GMT';
+        $mockClient = new MockHttpClient([
+            new MockResponse('cached', [
+                'http_code' => 200,
+                'response_headers' => ['Last-Modified' => $lastModified, 'Cache-Control' => 'max-age=300'],
+            ]),
+            new MockResponse('should not be served'),
+        ]);
+
+        $client = new CachingHttpClient($mockClient, $this->cacheAdapter);
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-modified-since');
+        $this->assertSame('cached', $response->getContent());
+
+        $response = $client->request('GET', 'http://example.com/fresh-client-modified-since', [
+            'headers' => ['If-Modified-Since' => $lastModified],
+        ]);
+
+        $this->assertSame(304, $response->getStatusCode());
+        $this->assertSame('', $response->getContent(false));
     }
 
     public function testStaleResponseWithTraceableClient()
