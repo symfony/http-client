@@ -37,8 +37,8 @@ use Symfony\Contracts\Service\ResetInterface;
  *   2. stale-while-revalidate:
  *     - There's no actual "background revalidation" for stale responses, they will
  *       always be revalidated.
- *   3. min-fresh, max-stale, only-if-cached:
- *     - Request directives are not parsed; the client ignores them.
+ *   3. min-fresh, max-stale:
+ *     - These request directives are not parsed; the client ignores them.
  *
  * @see https://www.rfc-editor.org/rfc/rfc9111
  */
@@ -51,21 +51,17 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
     use HttpClientTrait;
 
     /**
-     * The status codes that are always cacheable.
+     * The status codes that are cacheable by default.
      */
-    private const CACHEABLE_STATUS_CODES = [200, 203, 204, 300, 301, 404, 410];
-    /**
-     * The status codes that are cacheable if the response carries explicit cache directives.
-     */
-    private const CONDITIONALLY_CACHEABLE_STATUS_CODES = [302, 303, 307, 308];
+    private const DEFAULT_CACHEABLE_STATUS_CODES = [200, 203, 204, 300, 301, 308, 404, 405, 410, 414, 501];
     /**
      * The HTTP methods that are always cacheable.
      */
     private const CACHEABLE_METHODS = ['GET', 'HEAD'];
     /**
-     * The HTTP methods that will trigger a cache invalidation.
+     * The HTTP methods that are considered safe per RFC 9110.
      */
-    private const UNSAFE_METHODS = ['POST', 'PUT', 'DELETE', 'PATCH'];
+    private const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS', 'TRACE'];
     /**
      * Headers that influence the response and may affect caching behavior.
      */
@@ -85,14 +81,23 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
      */
     private const EXCLUDED_HEADERS = [
         'connection' => true,
+        'keep-alive' => true,
         'proxy-authenticate' => true,
         'proxy-authentication-info' => true,
         'proxy-authorization' => true,
+        'te' => true,
+        'trailer' => true,
+        'transfer-encoding' => true,
+        'upgrade' => true,
     ];
     /**
      * Maximum heuristic freshness lifetime in seconds (24 hours).
      */
     private const MAX_HEURISTIC_FRESHNESS_TTL = 86400;
+    /**
+     * RFC 9111 recommends a heuristic freshness lifetime of 10% of the time since Last-Modified.
+     */
+    private const HEURISTIC_FRESHNESS_FRACTION = 0.1;
 
     private array $defaultOptions = self::OPTIONS_DEFAULTS;
     private bool $isInnerRequest = false;
@@ -137,8 +142,13 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
 
         $fullUrl = implode('', $fullUrl);
         $fullUrlTag = self::hash($fullUrl);
+        $requestCacheControl = self::parseRequestCacheControlHeader($options['normalized_headers']['cache-control'] ?? []);
 
         if ('' !== $options['body'] || ($options['extra']['no_cache'] ?? false) || isset($options['normalized_headers']['range']) || !\in_array($method, self::CACHEABLE_METHODS, true)) {
+            if (isset($requestCacheControl['only-if-cached'])) {
+                return self::createGatewayTimeoutResponse($method, $url, $options);
+            }
+
             $passthru = function (ChunkInterface $chunk, AsyncContext $context) use ($method, $fullUrlTag): \Generator {
                 if (null !== $chunk->getError() || $chunk->isTimeout() || !$chunk->isFirst()) {
                     yield $chunk;
@@ -147,7 +157,7 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
                 }
 
                 $statusCode = $context->getStatusCode();
-                if ($statusCode >= 100 && $statusCode < 400 && \in_array($method, self::UNSAFE_METHODS, true)) {
+                if ($statusCode >= 200 && $statusCode < 400 && !\in_array($method, self::SAFE_METHODS, true)) {
                     $this->cache->invalidateTags([$fullUrlTag]);
                 }
 
@@ -165,28 +175,53 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
             }
         }
 
+        if (isset($requestCacheControl['no-store'])) {
+            return new AsyncResponse($this->client, $method, $url, $options);
+        }
+
         $requestHash = self::hash($method.$fullUrl.serialize(array_intersect_key($options['normalized_headers'], self::RESPONSE_INFLUENCING_HEADERS)));
         $varyKey = "vary_{$requestHash}";
         $varyFields = $this->cache->get($varyKey, static fn ($item, &$save): array => ($save = false) ?: [], 0);
 
         $metadataKey = self::getMetadataKey($requestHash, $options['normalized_headers'], $varyFields);
         $cachedData = $this->cache->get($metadataKey, static fn ($item, &$save): array => ($save = false) ?: [], 0);
+        $hasClientConditionalValidator = isset($options['normalized_headers']['if-none-match']) || isset($options['normalized_headers']['if-modified-since']);
+        $sentCacheValidator = false;
+        $allowStaleFallback = true;
 
         $freshness = null;
         if ($cachedData) {
             $freshness = $this->evaluateCacheFreshness($cachedData);
+            $cachedResponseAcceptable = $this->isCachedResponseAcceptable($cachedData, $requestCacheControl, $freshness);
+            $allowStaleFallback = $cachedResponseAcceptable || !$this->requestCacheControlRequiresRevalidation($cachedData, $requestCacheControl);
 
-            if (Freshness::Fresh === $freshness) {
+            if ($cachedResponseAcceptable) {
+                if ($hasClientConditionalValidator && self::clientValidatorMatchesCachedResponse($options['normalized_headers'], $cachedData)) {
+                    return self::createNotModifiedResponse($method, $url, $options, $cachedData['headers']);
+                }
+
                 return $this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey);
             }
 
-            if (isset($cachedData['headers']['etag'])) {
-                $options['headers']['If-None-Match'] = implode(', ', $cachedData['headers']['etag']);
+            if (isset($requestCacheControl['only-if-cached'])) {
+                return self::createGatewayTimeoutResponse($method, $url, $options);
             }
 
-            if (isset($cachedData['headers']['last-modified'][0])) {
-                $options['headers']['If-Modified-Since'] = $cachedData['headers']['last-modified'][0];
+            if (!$hasClientConditionalValidator) {
+                if (isset($cachedData['headers']['etag'])) {
+                    $options['headers']['If-None-Match'] = implode(', ', $cachedData['headers']['etag']);
+                    $sentCacheValidator = true;
+                }
+
+                if (isset($cachedData['headers']['last-modified'][0])) {
+                    $options['headers']['If-Modified-Since'] = $cachedData['headers']['last-modified'][0];
+                    $sentCacheValidator = true;
+                }
             }
+        }
+
+        if (isset($requestCacheControl['only-if-cached'])) {
+            return self::createGatewayTimeoutResponse($method, $url, $options);
         }
 
         // consistent expiration time for all items
@@ -204,6 +239,9 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
             $url,
             $method,
             $options,
+            $hasClientConditionalValidator,
+            $sentCacheValidator,
+            $allowStaleFallback,
         ): \Generator {
             static $attemptTag = null;
             static $firstChunkKey = null;
@@ -212,7 +250,7 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
             if (null !== $chunk->getError() || $chunk->isTimeout()) {
                 null !== $attemptTag && $this->cache->invalidateTags([$attemptTag]);
 
-                if (Freshness::StaleButUsable === $freshness) {
+                if ($allowStaleFallback && Freshness::StaleButUsable === $freshness) {
                     $this->logger?->info('Serving stale cached response for "{method} {url}" because the upstream call failed: {error}.', [
                         'method' => $method,
                         'url' => $url,
@@ -248,30 +286,66 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
                 $attemptTag = self::generateChunkKey();
 
                 if (304 === $statusCode && null !== $freshness) {
-                    $headers = array_merge($cachedData['headers'], array_diff_key($headers, self::EXCLUDED_HEADERS));
+                    $shouldUpdateCachedMetadata = ($sentCacheValidator || $hasClientConditionalValidator) && self::notModifiedResponseMatchesCachedResponse($headers, $cachedData);
 
-                    $cacheControl = self::parseCacheControlHeader($headers['cache-control'] ?? []);
-                    $maxAge = $this->determineMaxAge($headers, $cacheControl);
+                    if (!$shouldUpdateCachedMetadata) {
+                        $context->passthru();
 
-                    $cachedData['expires_at'] = self::calculateExpiresAt($maxAge);
-                    $cachedData['stored_at'] = time();
-                    $cachedData['initial_age'] = self::getCurrentAge($headers);
-                    $cachedData['headers'] = $headers;
+                        yield $chunk;
 
-                    $this->cache->get($metadataKey, static function (ItemInterface $item) use ($cachedData, $expiresAt, $fullUrlTag, $metadataKey): array {
+                        return;
+                    }
+
+                    $responseTime = time();
+                    $requestTime = (int) ($context->getInfo('start_time') ?? $responseTime);
+                    if ($requestTime <= $cachedData['stored_at']) {
+                        $requestTime = $responseTime;
+                    }
+                    $correctedInitialAge = self::getCorrectedInitialAge($headers, $requestTime, $responseTime);
+                    $updatedHeaders = self::filterStorableHeaders(array_merge($cachedData['headers'], $headers), self::getExcludedHeaders($headers));
+                    $updatedCachedData = array_replace($cachedData, [
+                        'stored_at' => $responseTime,
+                        'initial_age' => $correctedInitialAge,
+                        'headers' => $updatedHeaders,
+                    ]);
+
+                    $updatedCacheControl = self::parseCacheControlHeader($updatedCachedData['headers']['cache-control'] ?? []);
+                    $updatedCachedData['expires_at'] = self::calculateExpiresAt($this->determineMaxAge($updatedCachedData['headers'], $updatedCacheControl, $correctedInitialAge, $requestTime, $responseTime));
+
+                    $newVaryFields = $this->parseVaryFields($updatedCachedData['headers']['vary'] ?? []);
+                    $updatedMetadataIsCacheable = !\in_array('*', $newVaryFields, true)
+                        && $varyFields === $newVaryFields
+                        && $this->isServerResponseCacheable($cachedData['status_code'], $options['normalized_headers'], $updatedCachedData['headers'], $updatedCacheControl);
+
+                    if (!$updatedMetadataIsCacheable) {
+                        $this->cache->delete($metadataKey);
+
+                        $context->passthru();
+
+                        if (!$hasClientConditionalValidator) {
+                            $context->replaceResponse($this->createResponseFromCache($updatedCachedData, $method, $url, $options, $metadataKey, $expiresAt));
+                        }
+
+                        return;
+                    }
+
+                    $updatedCachedData = $this->cache->get($metadataKey, static function (ItemInterface $item) use ($updatedCachedData, $expiresAt, $fullUrlTag, $metadataKey): array {
                         $item->expiresAt($expiresAt)->tag([$fullUrlTag, $metadataKey]);
 
-                        return $cachedData;
+                        return $updatedCachedData;
                     }, \INF);
 
                     $context->passthru();
-                    $context->replaceResponse($this->createResponseFromCache($cachedData, $method, $url, $options, $metadataKey, $expiresAt));
+
+                    if (!$hasClientConditionalValidator) {
+                        $context->replaceResponse($this->createResponseFromCache($updatedCachedData, $method, $url, $options, $metadataKey, $expiresAt));
+                    }
 
                     return;
                 }
 
                 if ($statusCode >= 500 && $statusCode < 600) {
-                    if (Freshness::StaleButUsable === $freshness) {
+                    if ($allowStaleFallback && Freshness::StaleButUsable === $freshness) {
                         $this->logger?->info('Serving stale cached response for "{method} {url}" because the upstream returned a server error (HTTP {status}).', [
                             'method' => $method,
                             'url' => $url,
@@ -302,16 +376,7 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
                 }
 
                 // recomputing vary fields in case it changed or for first request
-                $newVaryFields = [];
-                foreach ($headers['vary'] ?? [] as $vary) {
-                    foreach (explode(',', $vary) as $field) {
-                        $field = strtolower(trim($field));
-                        if ('cookie' === $field ? $this->sharedCache : !preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/D', $field)) {
-                            $field = '*';
-                        }
-                        $newVaryFields[] = $field;
-                    }
-                }
+                $newVaryFields = $this->parseVaryFields($headers['vary'] ?? []);
 
                 if (\in_array('*', $newVaryFields, true)) {
                     $context->passthru();
@@ -359,15 +424,18 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
                     ];
                 }, \INF);
 
-                $maxAge = $this->determineMaxAge($headers, self::parseCacheControlHeader($headers['cache-control'] ?? []));
-                $this->cache->get($metadataKey, static function (ItemInterface $item) use ($context, $headers, $maxAge, $expiresAt, $fullUrlTag, $metadataKey, $attemptTag, $firstChunkKey): array {
+                $requestTime = (int) ($context->getInfo('start_time') ?? time());
+                $responseTime = time();
+                $correctedInitialAge = self::getCorrectedInitialAge($headers, $requestTime, $responseTime);
+                $maxAge = $this->determineMaxAge($headers, self::parseCacheControlHeader($headers['cache-control'] ?? []), $correctedInitialAge, $requestTime, $responseTime);
+                $this->cache->get($metadataKey, static function (ItemInterface $item) use ($context, $headers, $maxAge, $expiresAt, $fullUrlTag, $metadataKey, $attemptTag, $firstChunkKey, $responseTime, $correctedInitialAge): array {
                     $item->tag([$fullUrlTag, $metadataKey, $attemptTag])->expiresAt($expiresAt);
 
                     return [
                         'status_code' => $context->getStatusCode(),
-                        'headers' => array_diff_key($headers, self::EXCLUDED_HEADERS),
-                        'initial_age' => self::getCurrentAge($headers),
-                        'stored_at' => time(),
+                        'headers' => self::filterStorableHeaders($headers),
+                        'initial_age' => $correctedInitialAge,
+                        'stored_at' => $responseTime,
                         'expires_at' => self::calculateExpiresAt($maxAge),
                         'next_chunk' => $firstChunkKey,
                     ];
@@ -512,14 +580,197 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
             foreach (explode(',', $line) as $directive) {
                 if (str_contains($directive, '=')) {
                     [$name, $value] = explode('=', $directive, 2);
-                    $parsed[trim($name)] = trim($value);
+                    $normalizedName = strtolower(trim($name));
+                    $normalizedValue = self::unquoteCacheControlValue(trim($value));
                 } else {
-                    $parsed[trim($directive)] = true;
+                    $normalizedName = strtolower(trim($directive));
+                    $normalizedValue = true;
                 }
+
+                if ('' === $normalizedName) {
+                    continue;
+                }
+
+                if (\array_key_exists($normalizedName, $parsed)) {
+                    // Duplicate directive values are ambiguous; make value-based checks fail closed.
+                    $parsed[$normalizedName] = '';
+
+                    continue;
+                }
+
+                $parsed[$normalizedName] = $normalizedValue;
             }
         }
 
         return $parsed;
+    }
+
+    private static function unquoteCacheControlValue(string $value): string
+    {
+        if (2 <= \strlen($value) && '"' === $value[0] && '"' === $value[-1]) {
+            return substr($value, 1, -1);
+        }
+
+        return $value;
+    }
+
+    private static function parseDeltaSeconds(string|true|null $value): ?int
+    {
+        if (!\is_string($value) || '' === $value || !ctype_digit($value)) {
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    /**
+     * @param array<string, string[]> $headers
+     *
+     * @return array<string, string[]>
+     */
+    private static function filterStorableHeaders(array $headers, ?array $excludedHeaders = null): array
+    {
+        $excludedHeaders ??= self::getExcludedHeaders($headers);
+
+        return array_diff_key($headers, $excludedHeaders);
+    }
+
+    /**
+     * @param array<string, string[]> $headers
+     *
+     * @return array<string, bool>
+     */
+    private static function getExcludedHeaders(array $headers): array
+    {
+        $excludedHeaders = self::EXCLUDED_HEADERS;
+
+        foreach ($headers['connection'] ?? [] as $connectionHeader) {
+            foreach (explode(',', $connectionHeader) as $headerName) {
+                $headerName = strtolower(trim($headerName));
+
+                if ('' !== $headerName) {
+                    $excludedHeaders[$headerName] = true;
+                }
+            }
+        }
+
+        return $excludedHeaders;
+    }
+
+    /**
+     * @param array<string, string[]>                 $headers
+     * @param array{headers: array<string, string[]>} $cachedData
+     */
+    private static function notModifiedResponseMatchesCachedResponse(array $headers, array $cachedData): bool
+    {
+        if (isset($headers['etag'])) {
+            $cachedEtags = $cachedData['headers']['etag'] ?? [];
+
+            foreach ($headers['etag'] as $etag) {
+                if (!self::isWeakEtag($etag)) {
+                    foreach ($cachedEtags as $cachedEtag) {
+                        if (!self::isWeakEtag($cachedEtag) && $etag === $cachedEtag) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+            }
+
+            foreach ($headers['etag'] as $etag) {
+                foreach ($cachedEtags as $cachedEtag) {
+                    if (self::stripWeakPrefix($etag) === self::stripWeakPrefix($cachedEtag)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        foreach ($headers['last-modified'] ?? [] as $lastModified) {
+            return \in_array($lastModified, $cachedData['headers']['last-modified'] ?? [], true);
+        }
+
+        return !isset($cachedData['headers']['etag']) && !isset($cachedData['headers']['last-modified']);
+    }
+
+    /**
+     * @param array<string, string[]>                 $requestHeaders
+     * @param array{headers: array<string, string[]>} $cachedData
+     */
+    private static function clientValidatorMatchesCachedResponse(array $requestHeaders, array $cachedData): bool
+    {
+        if (isset($requestHeaders['if-none-match'])) {
+            $cachedEtags = $cachedData['headers']['etag'] ?? [];
+
+            foreach ($requestHeaders['if-none-match'] as $ifNoneMatch) {
+                $ifNoneMatch = substr($ifNoneMatch, 15);
+
+                foreach (explode(',', $ifNoneMatch) as $etag) {
+                    $etag = trim($etag);
+
+                    if ('*' === $etag && [] !== $cachedEtags) {
+                        return true;
+                    }
+
+                    foreach ($cachedEtags as $cachedEtag) {
+                        if (self::stripWeakPrefix($etag) === self::stripWeakPrefix($cachedEtag)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        if (!isset($requestHeaders['if-modified-since'], $cachedData['headers']['last-modified'][0])) {
+            return false;
+        }
+
+        $lastModified = strtotime($cachedData['headers']['last-modified'][0]);
+        if (false === $lastModified) {
+            return false;
+        }
+
+        foreach ($requestHeaders['if-modified-since'] as $ifModifiedSince) {
+            $ifModifiedSince = substr($ifModifiedSince, 19);
+
+            if (false !== $modifiedSince = strtotime($ifModifiedSince)) {
+                return $lastModified <= $modifiedSince;
+            }
+        }
+
+        return false;
+    }
+
+    private static function stripWeakPrefix(string $etag): string
+    {
+        return str_starts_with($etag, 'W/') ? substr($etag, 2) : $etag;
+    }
+
+    private static function isWeakEtag(string $etag): bool
+    {
+        return str_starts_with($etag, 'W/');
+    }
+
+    /**
+     * @param string[] $header
+     *
+     * @return array<string, string|true>
+     */
+    private static function parseRequestCacheControlHeader(array $header): array
+    {
+        $cacheControlHeader = [];
+
+        foreach ($header as $line) {
+            // Strip the "Cache-Control: " prefix added by normalizeHeaders(); response headers contain values only.
+            $cacheControlHeader[] = substr($line, 15);
+        }
+
+        return self::parseCacheControlHeader($cacheControlHeader);
     }
 
     /**
@@ -532,9 +783,9 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
      */
     private function evaluateCacheFreshness(array $data): Freshness
     {
-        $parseCacheControlHeader = self::parseCacheControlHeader($data['headers']['cache-control'] ?? []);
+        $cacheControl = self::parseCacheControlHeader($data['headers']['cache-control'] ?? []);
 
-        if (isset($parseCacheControlHeader['no-cache'])) {
+        if (isset($cacheControl['no-cache'])) {
             return Freshness::Stale;
         }
 
@@ -546,13 +797,22 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
         }
 
         if (
-            isset($parseCacheControlHeader['must-revalidate'])
-            || ($this->sharedCache && isset($parseCacheControlHeader['proxy-revalidate']))
+            isset($cacheControl['must-revalidate'])
+            || (
+                $this->sharedCache
+                && (
+                    isset($cacheControl['proxy-revalidate'])
+                    || self::hasValidSharedMaxAge($cacheControl)
+                )
+            )
         ) {
             return Freshness::MustRevalidate;
         }
 
-        if (isset($parseCacheControlHeader['stale-if-error']) && ($now - $expires) <= (int) $parseCacheControlHeader['stale-if-error']) {
+        if (
+            null !== ($staleIfError = self::parseDeltaSeconds($cacheControl['stale-if-error'] ?? null))
+            && ($now - $expires) <= $staleIfError
+        ) {
             return Freshness::StaleButUsable;
         }
 
@@ -576,48 +836,66 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
      *
      * @return int|null The maximum age of the response, or null if it cannot be determined
      */
-    private function determineMaxAge(array $headers, array $cacheControl): ?int
+    private function determineMaxAge(array $headers, array $cacheControl, int $correctedInitialAge, int $requestTime, int $responseTime): ?int
     {
-        $age = self::getCurrentAge($headers);
+        $age = $correctedInitialAge;
 
         if ($this->sharedCache && isset($cacheControl['s-maxage'])) {
-            $sharedMaxAge = (int) $cacheControl['s-maxage'];
+            if (null === $sharedMaxAge = self::parseDeltaSeconds($cacheControl['s-maxage'])) {
+                return null;
+            }
 
             return max(0, $sharedMaxAge - $age);
         }
 
         if (isset($cacheControl['max-age'])) {
-            $maxAge = (int) $cacheControl['max-age'];
+            if (null === $maxAge = self::parseDeltaSeconds($cacheControl['max-age'])) {
+                return null;
+            }
 
             return max(0, $maxAge - $age);
         }
 
         foreach ($headers['expires'] ?? [] as $expire) {
             if (false !== $expirationTimestamp = strtotime($expire)) {
-                $timeUntilExpiration = $expirationTimestamp - time() - $age;
+                $dateTimestamp = self::getDateHeaderTimestamp($headers) ?? $responseTime;
+                $timeUntilExpiration = $expirationTimestamp - $dateTimestamp - $age;
 
                 return max($timeUntilExpiration, 0);
             }
         }
 
-        // Heuristic freshness fallback when no explicit directives are present
-        if (
-            !isset($cacheControl['no-cache'])
-            && !isset($cacheControl['no-store'])
-            && isset($headers['last-modified'])
-        ) {
-            foreach ($headers['last-modified'] as $lastModified) {
-                if (false === $lastModifiedTimestamp = strtotime($lastModified)) {
-                    continue;
-                }
-                if (0 < $secondsSinceLastModified = time() - $lastModifiedTimestamp) {
-                    // Heuristic: 10% of time since last modified, capped at max heuristic freshness
-                    $heuristicFreshnessSeconds = (int) ($secondsSinceLastModified * 0.1);
-                    $cappedHeuristicFreshness = min($heuristicFreshnessSeconds, self::MAX_HEURISTIC_FRESHNESS_TTL);
+        if (null !== $heuristicFreshnessLifetime = $this->determineHeuristicFreshnessLifetime($headers, $cacheControl, $requestTime)) {
+            return max(0, $heuristicFreshnessLifetime - $age);
+        }
 
-                    return max(0, $cappedHeuristicFreshness - $age);
-                }
+        return null;
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     * @param array<string, string|true>     $cacheControl
+     */
+    private function determineHeuristicFreshnessLifetime(array $headers, array $cacheControl, int $requestTime): ?int
+    {
+        if (!$this->allowsHeuristicFreshness($headers, $cacheControl)) {
+            return null;
+        }
+
+        foreach ($headers['last-modified'] as $lastModified) {
+            if (false === $lastModifiedTimestamp = strtotime($lastModified)) {
+                continue;
             }
+
+            $secondsSinceLastModified = $requestTime - $lastModifiedTimestamp;
+
+            if (0 >= $secondsSinceLastModified) {
+                continue;
+            }
+
+            $heuristicFreshnessLifetime = (int) ($secondsSinceLastModified * self::HEURISTIC_FRESHNESS_FRACTION);
+
+            return min($heuristicFreshnessLifetime, self::MAX_HEURISTIC_FRESHNESS_TTL);
         }
 
         return null;
@@ -633,6 +911,84 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
     private static function getCurrentAge(array $headers): int
     {
         return (int) ($headers['age'][0] ?? 0);
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     */
+    private static function getDateHeaderTimestamp(array $headers): ?int
+    {
+        foreach ($headers['date'] ?? [] as $date) {
+            if (false !== $timestamp = strtotime($date)) {
+                return $timestamp;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     */
+    private static function getCorrectedInitialAge(array $headers, int $requestTime, int $responseTime): int
+    {
+        $ageValue = self::getCurrentAge($headers);
+        $dateValue = self::getDateHeaderTimestamp($headers);
+        $apparentAge = null === $dateValue ? 0 : max(0, $responseTime - $dateValue);
+        $responseDelay = max(0, $responseTime - $requestTime);
+        $correctedAgeValue = $ageValue + $responseDelay;
+
+        return max($apparentAge, $correctedAgeValue);
+    }
+
+    /**
+     * @param array{initial_age: int, stored_at: int} $cachedData
+     * @param array<string, string|true>              $requestCacheControl
+     */
+    private function isCachedResponseAcceptable(array $cachedData, array $requestCacheControl, Freshness $freshness): bool
+    {
+        if (Freshness::Fresh !== $freshness || isset($requestCacheControl['no-cache'])) {
+            return false;
+        }
+
+        if (!isset($requestCacheControl['max-age'])) {
+            return true;
+        }
+
+        if (null === $maxAge = self::parseDeltaSeconds($requestCacheControl['max-age'])) {
+            return true;
+        }
+
+        if (0 === $maxAge) {
+            return false;
+        }
+
+        return $this->getCachedResponseAge($cachedData) <= $maxAge;
+    }
+
+    /**
+     * @param array{initial_age: int, stored_at: int} $cachedData
+     * @param array<string, string|true>              $requestCacheControl
+     */
+    private function requestCacheControlRequiresRevalidation(array $cachedData, array $requestCacheControl): bool
+    {
+        if (isset($requestCacheControl['no-cache'])) {
+            return true;
+        }
+
+        if (null === $maxAge = self::parseDeltaSeconds($requestCacheControl['max-age'] ?? null)) {
+            return false;
+        }
+
+        return $this->getCachedResponseAge($cachedData) > $maxAge;
+    }
+
+    /**
+     * @param array{initial_age: int, stored_at: int} $cachedData
+     */
+    private function getCachedResponseAge(array $cachedData): int
+    {
+        return $cachedData['initial_age'] + (time() - $cachedData['stored_at']);
     }
 
     /**
@@ -652,6 +1008,29 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
     }
 
     /**
+     * @param string[] $varyHeaders
+     *
+     * @return string[]
+     */
+    private function parseVaryFields(array $varyHeaders): array
+    {
+        $varyFields = [];
+        foreach ($varyHeaders as $vary) {
+            foreach (explode(',', $vary) as $field) {
+                $field = strtolower(trim($field));
+                if ('cookie' === $field ? $this->sharedCache : !preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/D', $field)) {
+                    $field = '*';
+                }
+                $varyFields[] = $field;
+            }
+        }
+
+        sort($varyFields);
+
+        return $varyFields;
+    }
+
+    /**
      * Checks if the server response is cacheable according to the HTTP 1.1
      * specification (RFC 9111).
      *
@@ -664,6 +1043,11 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
      */
     private function isServerResponseCacheable(int $statusCode, array $requestHeaders, array $responseHeaders, array $cacheControl): bool
     {
+        // Only final status codes are cacheable by RFC 9111 Section 3.
+        if ($statusCode < 200 || $statusCode > 599 || self::isStatusCodeExcludedFromStorage($statusCode)) {
+            return false;
+        }
+
         // no-store => skip caching
         if (isset($cacheControl['no-store'])) {
             return false;
@@ -671,7 +1055,7 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
 
         if ($this->sharedCache) {
             if (
-                !isset($cacheControl['public']) && !isset($cacheControl['s-maxage']) && !isset($cacheControl['must-revalidate'])
+                !isset($cacheControl['public']) && !self::hasValidSharedMaxAge($cacheControl) && !isset($cacheControl['must-revalidate'])
                 && isset($requestHeaders['authorization'])
             ) {
                 return false;
@@ -686,29 +1070,74 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
             }
         }
 
-        // Conditionals require an explicit expiration
-        if (\in_array($statusCode, self::CONDITIONALLY_CACHEABLE_STATUS_CODES, true)) {
-            return $this->hasExplicitExpiration($responseHeaders, $cacheControl);
+        if (\in_array($statusCode, self::DEFAULT_CACHEABLE_STATUS_CODES, true)) {
+            return true;
         }
 
-        return \in_array($statusCode, self::CACHEABLE_STATUS_CODES, true);
+        if ($this->hasExplicitFreshness($responseHeaders, $cacheControl)) {
+            return true;
+        }
+
+        return $this->allowsHeuristicFreshnessForNonDefaultStatus($responseHeaders, $cacheControl);
+    }
+
+    private static function isStatusCodeExcludedFromStorage(int $statusCode): bool
+    {
+        // 206 is only cacheable for range requests, which this client does not store.
+        return 206 === $statusCode || 304 === $statusCode;
     }
 
     /**
-     * Checks if the response has an explicit expiration.
+     * Checks if the response has explicit freshness.
      *
-     * This function will return true if the response has an explicit expiration
-     * time specified in the headers or in the Cache-Control directives,
+     * This function will return true if the response has explicit freshness
+     * specified in the headers or in the Cache-Control directives,
      * false otherwise.
      *
      * @param array<string, string|string[]> $headers
      * @param array<string, string|true>     $cacheControl
      */
-    private function hasExplicitExpiration(array $headers, array $cacheControl): bool
+    private function hasExplicitFreshness(array $headers, array $cacheControl): bool
     {
-        return isset($headers['expires'])
-            || ($this->sharedCache && isset($cacheControl['s-maxage']))
-            || isset($cacheControl['max-age']);
+        if (($this->sharedCache && self::hasValidSharedMaxAge($cacheControl)) || null !== self::parseDeltaSeconds($cacheControl['max-age'] ?? null)) {
+            return true;
+        }
+
+        foreach ($headers['expires'] ?? [] as $expires) {
+            if (false !== strtotime($expires)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, string|true> $cacheControl
+     */
+    private static function hasValidSharedMaxAge(array $cacheControl): bool
+    {
+        return null !== self::parseDeltaSeconds($cacheControl['s-maxage'] ?? null);
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     * @param array<string, string|true>     $cacheControl
+     */
+    private function allowsHeuristicFreshnessForNonDefaultStatus(array $headers, array $cacheControl): bool
+    {
+        return isset($cacheControl['public']) && $this->allowsHeuristicFreshness($headers, $cacheControl);
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     * @param array<string, string|true>     $cacheControl
+     */
+    private function allowsHeuristicFreshness(array $headers, array $cacheControl): bool
+    {
+        return !isset($cacheControl['no-cache'])
+            && !isset($cacheControl['no-store'])
+            && isset($headers['last-modified']);
     }
 
     /**
@@ -758,7 +1187,7 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
         return MockResponse::fromRequest($method, $url, $options, new MockResponse($body(), [
             'http_code' => $cachedData['status_code'],
             'response_headers' => [
-                'age' => $cachedData['initial_age'] + (time() - $cachedData['stored_at']),
+                'age' => $this->getCachedResponseAge($cachedData),
             ] + $cachedData['headers'],
         ]));
     }
@@ -766,5 +1195,16 @@ class CachingHttpClient implements HttpClientInterface, LoggerAwareInterface, Re
     private static function createGatewayTimeoutResponse(string $method, string $url, array $options): MockResponse
     {
         return MockResponse::fromRequest($method, $url, $options, new MockResponse('', ['http_code' => 504]));
+    }
+
+    /**
+     * @param array<string, string|string[]> $headers
+     */
+    private static function createNotModifiedResponse(string $method, string $url, array $options, array $headers): MockResponse
+    {
+        return MockResponse::fromRequest($method, $url, $options, new MockResponse('', [
+            'http_code' => 304,
+            'response_headers' => array_diff_key($headers, self::EXCLUDED_HEADERS),
+        ]));
     }
 }
