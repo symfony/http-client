@@ -196,6 +196,94 @@ class CurlHttpClientTest extends HttpClientTestCase
         $this->assertSame('/302', $response->toArray()['REQUEST_URI'] ?? null);
     }
 
+    public function testNtlmRequiresFreshConnectionStateIsEmptyByDefault()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+
+        $r = new \ReflectionProperty($client, 'multi');
+        $state = $r->getValue($client);
+
+        self::assertSame([], $state->ntlmRequiresFreshConnection);
+    }
+
+    public function testNtlmFreshConnectionForcedWhenOriginKnown()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+
+        $client->request('GET', 'http://127.0.0.1:8057/')->getContent();
+
+        $r = new \ReflectionProperty($client, 'multi');
+        $state = $r->getValue($client);
+        $state->ntlmRequiresFreshConnection['http://127.0.0.1:8057'] = true;
+
+        $response = $client->request('GET', 'http://127.0.0.1:8057/', [
+            'auth_ntlm' => 'user:pass',
+        ]);
+        $response->getStatusCode();
+
+        self::assertStringNotContainsString('Re-using existing connection', $response->getInfo('debug'));
+    }
+
+    public function testNtlmStateNotMutatedByNonNtlmRequest()
+    {
+        // A plain (non-NTLM) request must not touch the NTLM origin map. This guards against
+        // a regression where the detection logic fires on every CURLMSG_DONE event (e.g. an
+        // inverted condition guard) — which would silently mark every origin as needing a
+        // fresh NTLM connection.
+        $client = $this->getHttpClient(__FUNCTION__);
+        $client->request('GET', 'http://127.0.0.1:8057/json')->getContent();
+
+        $r = new \ReflectionProperty($client, 'multi');
+        $state = $r->getValue($client);
+
+        self::assertSame([], $state->ntlmRequiresFreshConnection);
+    }
+
+    public function testNtlmStateNotMutatedByFreshConnectionNtlm401()
+    {
+        // A 401 + NTLM challenge that arrives on a fresh connection (NUM_CONNECTS != 0) is
+        // the legitimate first leg of libcurl's in-request handshake — not the cross-request
+        // de-auth case. Detection must NOT fire, and the origin must NOT be marked.
+        $client = $this->getHttpClient(__FUNCTION__);
+        $client->request('GET', 'http://127.0.0.1:8057/ntlm-always-401', [
+            'auth_ntlm' => 'user:pass',
+        ])->getStatusCode();
+
+        $r = new \ReflectionProperty($client, 'multi');
+        $state = $r->getValue($client);
+
+        self::assertSame([], $state->ntlmRequiresFreshConnection);
+    }
+
+    public function testNoNtlmLogMessagesForNonNtlmRequest()
+    {
+        // The observable signal for "we discarded a connection" is a specific log line.
+        // A plain request must not produce that line — protects against bugs that cause
+        // the retry/discovery path to fire unconditionally.
+        $client = $this->getHttpClient(__FUNCTION__);
+        $logger = new TestLogger();
+        $client->setLogger($logger);
+
+        $client->request('GET', 'http://127.0.0.1:8057/json')->getContent();
+
+        $ntlmLogs = array_filter($logger->logs, static fn ($msg) => str_contains($msg, 'NTLM'));
+        self::assertSame([], $ntlmLogs);
+    }
+
+    public function testNtlmLoopGuardDoesNotRetryWhenOriginAlreadyKnown()
+    {
+        $client = $this->getHttpClient(__FUNCTION__);
+        $r = new \ReflectionProperty($client, 'multi');
+        $state = $r->getValue($client);
+        $state->ntlmRequiresFreshConnection['http://127.0.0.1:8057'] = true;
+
+        $response = $client->request('GET', 'http://127.0.0.1:8057/ntlm-always-401', [
+            'auth_ntlm' => 'user:pass',
+        ]);
+
+        self::assertSame(401, $response->getStatusCode());
+    }
+
     #[Group('integration')]
     public function testMaxConnections()
     {
