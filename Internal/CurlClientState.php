@@ -35,6 +35,9 @@ final class CurlClientState extends ClientState
     public int $execCounter = \PHP_INT_MIN;
     public ?LoggerInterface $logger = null;
 
+    /** @var array<string, true> Indexed by self::originKey() */
+    public array $ntlmRequiresFreshConnection = [];
+
     public static array $curlVersion;
 
     public function __construct(
@@ -48,6 +51,14 @@ final class CurlClientState extends ClientState
         unset($this->handle, $this->share);
     }
 
+    public static function originKey(string $scheme, string $host, ?int $port = null): string
+    {
+        $scheme = strtolower(rtrim($scheme, ':'));
+        $port ??= 'https' === $scheme ? 443 : 80;
+
+        return $scheme.'://'.strtolower($host).':'.$port;
+    }
+
     public function reset(): void
     {
         foreach ($this->pushedResponses as $url => $response) {
@@ -59,6 +70,7 @@ final class CurlClientState extends ClientState
         $this->pushedResponses = [];
         $this->dnsCache->evictions = $this->dnsCache->evictions ?: $this->dnsCache->removals;
         $this->dnsCache->removals = $this->dnsCache->hostnames = [];
+        $this->ntlmRequiresFreshConnection = [];
 
         unset($this->share);
     }

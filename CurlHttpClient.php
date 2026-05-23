@@ -136,6 +136,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             $curlopts[\CURLOPT_HTTP_VERSION] = \CURL_HTTP_VERSION_2_0;
         }
 
+        $ntlmOriginKey = null;
         if (isset($options['auth_ntlm'])) {
             $curlopts[\CURLOPT_HTTPAUTH] = \CURLAUTH_NTLM;
             $curlopts[\CURLOPT_HTTP_VERSION] = \CURL_HTTP_VERSION_1_1;
@@ -154,6 +155,13 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             }
 
             $curlopts[\CURLOPT_USERPWD] = $options['auth_ntlm'];
+
+            $ntlmOriginKey = CurlClientState::originKey($scheme, $host, $port);
+
+            if (isset($this->multi->ntlmRequiresFreshConnection[$ntlmOriginKey])) {
+                $curlopts[\CURLOPT_FRESH_CONNECT] = true;
+                $curlopts[\CURLOPT_FORBID_REUSE] = true;
+            }
         }
 
         if (!\ZEND_THREAD_SAFE) {
@@ -316,7 +324,7 @@ final class CurlHttpClient implements HttpClientInterface, LoggerAwareInterface,
             }
         }
 
-        return $pushedResponse ?? new CurlResponse($this->multi, $ch, $options, $this->logger, $method, self::createRedirectResolver($options, $authority), CurlClientState::$curlVersion['version_number'], $url);
+        return $pushedResponse ?? new CurlResponse($this->multi, $ch, $options, $this->logger, $method, self::createRedirectResolver($options, $authority), CurlClientState::$curlVersion['version_number'], $url, $ntlmOriginKey);
     }
 
     public function stream(ResponseInterface|iterable $responses, ?float $timeout = null): ResponseStreamInterface
