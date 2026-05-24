@@ -245,7 +245,10 @@ class CurlHttpClientTest extends HttpClientTestCase
         // the legitimate first leg of libcurl's in-request handshake — not the cross-request
         // de-auth case. Detection must NOT fire, and the origin must NOT be marked.
         $client = $this->getHttpClient(__FUNCTION__);
-        $client->request('GET', 'http://127.0.0.1:8057/ntlm-always-401', [
+        $client->request('GET', 'http://127.0.0.1:8057/custom?'.http_build_query([
+            'status' => 401,
+            'headers' => ['WWW-Authenticate: NTLM TlRMTVNTUAACAAAAAwADADgAAAAGgokCB7m5ksVjjAsAAAAAAAAAAHYAdgA7AAAACgB8TwAAAA9QUkQ=', 'Content-Length: 0'],
+        ]), [
             'auth_ntlm' => 'user:pass',
         ])->getStatusCode();
 
@@ -277,7 +280,10 @@ class CurlHttpClientTest extends HttpClientTestCase
         $state = $r->getValue($client);
         $state->ntlmRequiresFreshConnection['http://127.0.0.1:8057'] = true;
 
-        $response = $client->request('GET', 'http://127.0.0.1:8057/ntlm-always-401', [
+        $response = $client->request('GET', 'http://127.0.0.1:8057/custom?'.http_build_query([
+            'status' => 401,
+            'headers' => ['WWW-Authenticate: NTLM TlRMTVNTUAACAAAAAwADADgAAAAGgokCB7m5ksVjjAsAAAAAAAAAAHYAdgA7AAAACgB8TwAAAA9QUkQ=', 'Content-Length: 0'],
+        ]), [
             'auth_ntlm' => 'user:pass',
         ]);
 
