@@ -21,6 +21,7 @@ use Symfony\Component\HttpClient\Chunk\LastChunk;
 use Symfony\Component\HttpClient\Chunk\ServerSentEvent;
 use Symfony\Component\HttpClient\EventSourceHttpClient;
 use Symfony\Component\HttpClient\Exception\EventSourceException;
+use Symfony\Component\HttpClient\Exception\TransportException;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
 use Symfony\Component\HttpClient\Response\ResponseStream;
@@ -215,6 +216,41 @@ class EventSourceHttpClientTest extends TestCase
         }
 
         $this->assertSame([], $expected);
+    }
+
+    public function testFirstChunkIsNotYieldedAgainAfterReconnect()
+    {
+        $es = new EventSourceHttpClient(new MockHttpClient([
+            new MockResponse((static function (): \Generator {
+                yield "id: 1\nevent: message\ndata: hello\n\n";
+
+                throw new TransportException('Connection dropped');
+            })(), [
+                'response_headers' => ['content-type: text/event-stream'],
+            ]),
+            new MockResponse("id: 2\nevent: message\ndata: world\n\n", [
+                'response_headers' => ['content-type: text/event-stream'],
+            ]),
+        ]), reconnectionTime: 0.0);
+
+        $res = $es->connect('http://localhost:8080/events');
+
+        $events = [];
+        foreach ($es->stream($res) as $chunk) {
+            if ($chunk->isTimeout()) {
+                continue;
+            }
+
+            if ($chunk->isLast()) {
+                break;
+            }
+
+            if ($chunk instanceof ServerSentEvent) {
+                $events[] = [$chunk->getId(), trim($chunk->getData())];
+            }
+        }
+
+        $this->assertSame([['1', 'hello'], ['2', 'world']], $events);
     }
 
     public static function contentTypeProvider()
